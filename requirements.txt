@@ -18,3 +18,7 @@ torchaudio>=2.0.0
 
 # Optional but recommended
 python-multipart>=0.0.6
+
+# Build dependencies
+nuitka>=2.0
+zstandard>=0.22.0

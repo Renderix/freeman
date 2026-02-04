@@ -30,7 +30,7 @@ sudo apt install espeak-ng
 ### Installation
 
 ```bash
-git clone https://github.com/yourname/freeman.git
+git clone https://github.com/Renderix/freeman.git
 cd freeman
 python -m venv venv
 source venv/bin/activate
@@ -117,6 +117,24 @@ Settings are stored in `~/.config/freeman/config.json`:
 | Real-Time Factor | 5-10x |
 | Max Sentence Length | ~150 chars (~10s audio) |
 | Partial Timeout | 2 seconds |
+
+## Standalone Binary
+
+### Download
+
+Pre-built binaries for macOS, Linux, and Windows are available on the [Releases page](https://github.com/Renderix/freeman/releases).
+
+### Build from Source
+
+```bash
+# Install build dependencies (already in requirements.txt)
+pip install -r requirements.txt
+
+# Build standalone executable
+python build.py
+```
+
+The binary will be created at `dist/freeman` (or `dist/freeman.exe` on Windows).
 
 ## Documentation
 
