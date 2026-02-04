@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎙️ Kokoro TTS Streamer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2rem;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            opacity: 0.9;
+            font-size: 0.95rem;
+        }
+        
+        .content {
+            padding: 30px;
+        }
+        
+        .controls {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        
+        .voice-select {
+            flex: 1;
+            min-width: 200px;
+        }
+        
+        .voice-select label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        select {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            font-size: 1rem;
+            background: white;
+            cursor: pointer;
+            transition: border-color 0.3s;
+        }
+        
+        select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .speed-control {
+            min-width: 150px;
+        }
+        
+        .speed-control label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        input[type="range"] {
+            width: 100%;
+            height: 8px;
+            border-radius: 4px;
+            background: #e0e0e0;
+            outline: none;
+            -webkit-appearance: none;
+        }
+        
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #667eea;
+            cursor: pointer;
+        }
+        
+        .speed-value {
+            text-align: center;
+            margin-top: 5px;
+            font-weight: 600;
+            color: #667eea;
+        }
+        
+        .text-input {
+            margin-bottom: 20px;
+        }
+        
+        .text-input label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        textarea {
+            width: 100%;
+            min-height: 120px;
+            padding: 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            font-size: 1.1rem;
+            resize: vertical;
+            font-family: inherit;
+            transition: border-color 0.3s;
+        }
+        
+        textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        
+        button {
+            flex: 1;
+            padding: 18px 30px;
+            border: none;
+            border-radius: 10px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        
+        .btn-speak {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .btn-speak:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+        
+        .btn-speak:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .btn-clear {
+            background: #f1f2f6;
+            color: #333;
+            flex: 0.5;
+        }
+        
+        .btn-clear:hover {
+            background: #dfe4ea;
+        }
+        
+        .status-bar {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 15px 20px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #ccc;
+        }
+        
+        .status-indicator.connected {
+            background: #2ed573;
+            animation: pulse 2s infinite;
+        }
+        
+        .status-indicator.disconnected {
+            background: #ff4757;
+        }
+        
+        .status-indicator.generating {
+            background: #ffa502;
+            animation: pulse 1s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .latency-display {
+            font-family: monospace;
+            background: #667eea;
+            color: white;
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+        
+        .audio-section {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            min-height: 100px;
+        }
+        
+        .audio-placeholder {
+            color: #999;
+            padding: 30px;
+            text-align: center;
+            font-style: italic;
+        }
+        
+        audio {
+            width: 100%;
+            margin-bottom: 10px;
+        }
+        
+        .spinner {
+            display: none;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 1s ease-in-out infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .spinner.active {
+            display: inline-block;
+        }
+        
+        .error-message {
+            background: #ffe0e0;
+            color: #c0392b;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        
+        .error-message.show {
+            display: block;
+        }
+        
+        .info-box {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 20px;
+            font-size: 0.9rem;
+        }
+        
+        .info-box strong {
+            color: #1976d2;
+        }
+        
+        .history-section {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 2px solid #e0e0e0;
+        }
+        
+        .history-title {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 10px;
+        }
+        
+        .history-list {
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        
+        .history-item {
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 5px;
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .history-item:hover {
+            background: #e3f2fd;
+        }
+        
+        .history-text {
+            flex: 1;
+            font-size: 0.9rem;
+            color: #555;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            margin-right: 10px;
+        }
+        
+        .history-actions {
+            display: flex;
+            gap: 5px;
+        }
+        
+        .btn-small {
+            padding: 5px 10px;
+            font-size: 0.8rem;
+            border-radius: 5px;
+            border: none;
+            cursor: pointer;
+            background: #667eea;
+            color: white;
+        }
+        
+        @media (max-width: 600px) {
+            .header h1 {
+                font-size: 1.5rem;
+            }
+            
+            .controls {
+                flex-direction: column;
+            }
+            
+            .button-group {
+                flex-direction: column;
+            }
+            
+            button {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎙️ Kokoro TTS Streamer</h1>
+            <p>One sentence at a time - instant audio playback</p>
+        </div>
+        
+        <div class="content">
+            <div class="error-message" id="errorMessage"></div>
+            
+            <div class="controls">
+                <div class="voice-select">
+                    <label for="voiceSelect">🗣️ Voice</label>
+                    <select id="voiceSelect">
+                        <option value="af_heart" selected>American Female - Heart (warm, expressive)</option>
+                        <option value="af_alloy">American Female - Alloy (professional)</option>
+                        <option value="af_aoede">American Female - Aoede (soft)</option>
+                        <option value="af_bella">American Female - Bella (calm)</option>
+                        <option value="af_jessica">American Female - Jessica (friendly)</option>
+                        <option value="af_kore">American Female - Kore (young)</option>
+                        <option value="af_nicole">American Female - Nicole (mature)</option>
+                        <option value="af_nova">American Female - Nova (energetic)</option>
+                        <option value="af_river">American Female - River (smooth)</option>
+                        <option value="af_sarah">American Female - Sarah (neutral)</option>
+                        <option value="af_sky">American Female - Sky (airy)</option>
+                        <option value="am_adam">American Male - Adam (natural)</option>
+                        <option value="am_echo">American Male - Echo (deep)</option>
+                        <option value="am_eric">American Male - Eric (clear)</option>
+                        <option value="am_fenrir">American Male - Fenrir (strong)</option>
+                        <option value="am_liam">American Male - Liam (friendly)</option>
+                        <option value="am_michael">American Male - Michael (authoritative)</option>
+                        <option value="am_onyx">American Male - Onyx (deep)</option>
+                        <option value="am_puck">American Male - Puck (youthful)</option>
+                        <option value="bf_alice">British Female - Alice (refined)</option>
+                        <option value="bf_emma">British Female - Emma (warm)</option>
+                        <option value="bf_isabella">British Female - Isabella (soft)</option>
+                        <option value="bf_lily">British Female - Lily (bright)</option>
+                        <option value="bm_daniel">British Male - Daniel (clear)</option>
+                        <option value="bm_fable">British Male - Fable (storyteller)</option>
+                        <option value="bm_george">British Male - George (classic)</option>
+                        <option value="bm_lewis">British Male - Lewis (smooth)</option>
+                    </select>
+                </div>
+                
+                <div class="speed-control">
+                    <label for="speedRange">⚡ Speed</label>
+                    <input type="range" id="speedRange" min="0.5" max="2.0" step="0.1" value="1.0">
+                    <div class="speed-value" id="speedValue">1.0x</div>
+                </div>
+            </div>
+            
+            <div class="text-input">
+                <label for="textInput">📝 Type ONE sentence, then click Speak</label>
+                <textarea id="textInput" placeholder="Example: Hello, this is a test of the Kokoro text-to-speech system."></textarea>
+            </div>
+            
+            <div class="button-group">
+                <button class="btn-speak" id="speakBtn" onclick="speak()">
+                    <span class="spinner" id="speakSpinner"></span>
+                    🔊 Speak
+                </button>
+                <button class="btn-clear" onclick="clearText()">
+                    🗑️ Clear
+                </button>
+            </div>
+            
+            <div class="status-bar">
+                <div class="status-item">
+                    <div class="status-indicator disconnected" id="connectionStatus"></div>
+                    <span id="connectionText">Disconnected</span>
+                </div>
+                <div class="status-item">
+                    <span id="statusText">Ready</span>
+                </div>
+                <div class="status-item" id="latencyContainer" style="display: none;">
+                    <span class="latency-display" id="latencyText">0ms</span>
+                </div>
+            </div>
+            
+            <div class="audio-section">
+                <div class="audio-placeholder" id="audioPlaceholder">
+                    🎵 Your audio will appear here instantly after clicking Speak
+                </div>
+                <audio id="audioPlayer" controls style="display: none;"></audio>
+            </div>
+            
+            <div class="history-section">
+                <div class="history-title">📜 History (Click to replay)</div>
+                <div class="history-list" id="historyList"></div>
+            </div>
+            
+            <div class="info-box">
+                <strong>💡 How it works:</strong> Type one sentence, click Speak, and audio plays immediately (typically 100-300ms). 
+                No waiting for long texts! Each sentence is processed independently for instant feedback.
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // WebSocket connection
+        let ws = null;
+        let isGenerating = false;
+        let audioHistory = [];
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 5;
+        
+        // DOM elements
+        const textInput = document.getElementById('textInput');
+        const voiceSelect = document.getElementById('voiceSelect');
+        const speedRange = document.getElementById('speedRange');
+        const speedValue = document.getElementById('speedValue');
+        const speakBtn = document.getElementById('speakBtn');
+        const speakSpinner = document.getElementById('speakSpinner');
+        const connectionStatus = document.getElementById('connectionStatus');
+        const connectionText = document.getElementById('connectionText');
+        const statusText = document.getElementById('statusText');
+        const latencyContainer = document.getElementById('latencyContainer');
+        const latencyText = document.getElementById('latencyText');
+        const audioPlaceholder = document.getElementById('audioPlaceholder');
+        const audioPlayer = document.getElementById('audioPlayer');
+        const errorMessage = document.getElementById('errorMessage');
+        const historyList = document.getElementById('historyList');
+        
+        // Update speed display
+        speedRange.addEventListener('input', (e) => {
+            speedValue.textContent = e.target.value + 'x';
+        });
+        
+        // Initialize WebSocket connection
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws/tts`;
+            
+            ws = new WebSocket(wsUrl);
+            ws.binaryType = 'arraybuffer';
+            
+            ws.onopen = () => {
+                console.log('WebSocket connected');
+                updateConnectionStatus(true);
+                reconnectAttempts = 0;
+            };
+            
+            ws.onmessage = (event) => {
+                if (event.data instanceof ArrayBuffer) {
+                    // Binary audio data
+                    handleAudioData(event.data);
+                } else {
+                    // JSON status message
+                    const data = JSON.parse(event.data);
+                    handleStatusMessage(data);
+                }
+            };
+            
+            ws.onclose = () => {
+                console.log('WebSocket closed');
+                updateConnectionStatus(false);
+                
+                if (reconnectAttempts < maxReconnectAttempts) {
+                    reconnectAttempts++;
+                    setTimeout(connectWebSocket, 2000);
+                }
+            };
+            
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                showError('Connection error. Retrying...');
+            };
+        }
+        
+        function updateConnectionStatus(connected) {
+            if (connected) {
+                connectionStatus.className = 'status-indicator connected';
+                connectionText.textContent = 'Connected';
+            } else {
+                connectionStatus.className = 'status-indicator disconnected';
+                connectionText.textContent = 'Disconnected';
+            }
+        }
+        
+        let generationStartTime = 0;
+        let currentAudioData = null;
+        
+        function handleStatusMessage(data) {
+            console.log('Status:', data);
+            
+            if (data.status === 'generating') {
+                statusText.textContent = 'Generating...';
+                generationStartTime = Date.now();
+                latencyContainer.style.display = 'block';
+                latencyText.textContent = '...';
+            } else if (data.status === 'complete') {
+                const totalTime = Date.now() - generationStartTime;
+                statusText.textContent = 'Done!';
+                latencyText.textContent = totalTime + 'ms';
+                
+                // Auto clear text after successful generation
+                setTimeout(() => {
+                    if (textInput.value) {
+                        addToHistory(textInput.value, currentAudioData);
+                        textInput.value = '';
+                        textInput.focus();
+                    }
+                }, 1000);
+                
+                resetUI();
+            } else if (data.status === 'error') {
+                showError(data.message);
+                resetUI();
+            }
+        }
+        
+        function handleAudioData(arrayBuffer) {
+            // Convert ArrayBuffer to Blob
+            const blob = new Blob([arrayBuffer], { type: 'audio/wav' });
+            currentAudioData = blob;
+            const audioUrl = URL.createObjectURL(blob);
+            
+            // Update audio player
+            audioPlayer.src = audioUrl;
+            audioPlaceholder.style.display = 'none';
+            audioPlayer.style.display = 'block';
+            
+            // Auto-play
+            audioPlayer.play().catch(e => {
+                console.log('Auto-play blocked:', e);
+            });
+        }
+        
+        async function speak() {
+            const text = textInput.value.trim();
+            if (!text) {
+                showError('Please enter text to speak');
+                return;
+            }
+            
+            // Check if multiple sentences
+            if (text.includes('.') && text.split('.').length > 2) {
+                showError('Please enter only ONE sentence at a time');
+                return;
+            }
+            
+            // Update UI
+            isGenerating = true;
+            speakBtn.disabled = true;
+            speakSpinner.classList.add('active');
+            statusText.textContent = 'Connecting...';
+            hideError();
+            currentAudioData = null;
+            
+            // Send request
+            const request = {
+                text: text,
+                voice: voiceSelect.value,
+                speed: parseFloat(speedRange.value)
+            };
+            
+            ws.send(JSON.stringify(request));
+        }
+        
+        function addToHistory(text, audioBlob) {
+            const item = {
+                text: text,
+                audio: audioBlob,
+                voice: voiceSelect.value,
+                timestamp: new Date().toLocaleTimeString()
+            };
+            audioHistory.unshift(item);
+            
+            // Keep only last 10
+            if (audioHistory.length > 10) {
+                audioHistory.pop();
+            }
+            
+            updateHistoryDisplay();
+        }
+        
+        function updateHistoryDisplay() {
+            historyList.innerHTML = '';
+            audioHistory.forEach((item, index) => {
+                const div = document.createElement('div');
+                div.className = 'history-item';
+                div.innerHTML = `
+                    <div class="history-text" title="${item.text}">${item.text}</div>
+                    <div class="history-actions">
+                        <button class="btn-small" onclick="replayHistory(${index})">▶️ Play</button>
+                    </div>
+                `;
+                historyList.appendChild(div);
+            });
+        }
+        
+        function replayHistory(index) {
+            const item = audioHistory[index];
+            if (item && item.audio) {
+                const audioUrl = URL.createObjectURL(item.audio);
+                audioPlayer.src = audioUrl;
+                audioPlaceholder.style.display = 'none';
+                audioPlayer.style.display = 'block';
+                audioPlayer.play();
+                
+                // Restore settings
+                voiceSelect.value = item.voice;
+            }
+        }
+        
+        function resetUI() {
+            isGenerating = false;
+            speakBtn.disabled = false;
+            speakSpinner.classList.remove('active');
+        }
+        
+        function clearText() {
+            textInput.value = '';
+            textInput.focus();
+        }
+        
+        function showError(message) {
+            errorMessage.textContent = message;
+            errorMessage.classList.add('show');
+            setTimeout(hideError, 5000);
+        }
+        
+        function hideError() {
+            errorMessage.classList.remove('show');
+        }
+        
+        // Initialize on page load
+        window.addEventListener('load', () => {
+            connectWebSocket();
+            textInput.focus();
+        });
+        
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (ws) {
+                ws.close();
+            }
+        });
+        
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                speak();
+            }
+        });
+    </script>
+</body>
+</html>
