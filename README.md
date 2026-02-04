@@ -1,160 +1,55 @@
-# Freeman TTS
+# Freeman TTS (Go Edition)
 
-High-performance, real-time text-to-speech streaming server using Kokoro-82M.
+High-performance, real-time text-to-speech streaming server using Kokoro-82M and ONNX Runtime.
 
 ```
-LLM Text Stream  →  Freeman  →  Audio Stream
-     "Hello"           ↓          🔊 <300ms
+LLM Text Stream  →  Freeman (Go)  →  Audio Stream
+     "Hello"            ↓           🔊 <100ms
 ```
 
 ## Features
 
-- **Real-time streaming**: <300ms latency from complete sentence to audio
-- **Sentence-aware buffering**: Automatically detects sentence boundaries
-- **26 high-quality voices**: American and British English, male and female
-- **WebSocket API**: Bidirectional streaming for LLM integration
-- **Apple Silicon optimized**: MPS acceleration on M1/M2/M3 Macs
+- **Blazing Fast**: <100ms latency from sentence to audio.
+- **Ultra-Lean**: Single **20MB** binary (down from 1GB in Python).
+- **Go Powered**: High-concurrency WebSocket support using Goroutines.
+- **Apple Silicon Optimized**: Native performance on M1/M2/M3 Macs.
 
 ## Quick Start
 
-### Prerequisites
+### 1. Prerequisites (macOS)
 
 ```bash
-# macOS
 brew install espeak-ng
-
-# Linux
-sudo apt install espeak-ng
 ```
 
-### Installation
+### 2. Setup Models
+
+The Go version uses ONNX models. Run the helper script to download them:
 
 ```bash
-git clone https://github.com/Renderix/freeman.git
-cd freeman
-uv sync
+chmod +x scripts/setup_go_models.sh
+./scripts/setup_go_models.sh
 ```
 
-### Run
+### 3. Build & Run
 
 ```bash
-# Start the TTS server
-uv run python -m src.cli start --port 17000
+# Build binary
+go build -o freeman ./cmd/freeman
 
-# Or start the configuration UI
-uv run python -m src.cli setup --port 8000
+# Start server (configure models path and port in config.yaml)
+./freeman start --config config.yaml
 ```
 
-### Test
+## API Usage
 
-```python
-import asyncio
-import websockets
-import json
+### WebSocket
+Connect to `ws://localhost:17000/ws/stream`.
 
-async def test():
-    async with websockets.connect("ws://localhost:17000/ws/stream") as ws:
-        await ws.send(json.dumps({
-            "type": "text",
-            "chunk": "Hello world.",
-            "is_final": True
-        }))
-
-        async for msg in ws:
-            if isinstance(msg, bytes):
-                with open("output.wav", "wb") as f:
-                    f.write(msg)
-                print("Audio saved!")
-                break
-
-asyncio.run(test())
-```
-
-## Available Voices
-
-| Voice | Description | Voice | Description |
-|-------|-------------|-------|-------------|
-| `af_heart` | American Female - Heart (default) | `am_adam` | American Male - Adam |
-| `af_bella` | American Female - Bella | `am_michael` | American Male - Michael |
-| `bf_emma` | British Female - Emma | `bm_george` | British Male - George |
-
-See [USAGE.md](USAGE.md) for the complete voice list.
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────┐
-│                  Freeman TTS Server                  │
-│                                                      │
-│  WebSocket  →  Session  →  Sentence  →  TTS Engine  │
-│   Server       Manager      Buffer      (Kokoro)    │
-│                                          ↓          │
-│                                   Audio (24kHz WAV) │
-└─────────────────────────────────────────────────────┘
-```
-
-## Configuration
-
-Settings are stored in `~/.config/freeman/config.json`:
-
-```json
-{
-  "voice": "af_heart",
-  "speed": 1.0,
-  "max_sentence_duration_sec": 10.0,
-  "partial_sentence_timeout_sec": 2.0,
-  "sample_rate": 24000
-}
-```
-
-## Performance
-
-| Metric | Target |
-|--------|--------|
-| First Audio Latency | <300ms |
-| Real-Time Factor | 5-10x |
-| Max Sentence Length | ~150 chars (~10s audio) |
-| Partial Timeout | 2 seconds |
-
-## Standalone Binary
-
-### Download
-
-Pre-built binaries for macOS, Linux, and Windows are available on the [Releases page](https://github.com/Renderix/freeman/releases).
-
-### Build from Source
-
-```bash
-# Build standalone executable
-uv run python build.py
-```
-
-The binary will be created at `dist/freeman` (or `dist/freeman.exe` on Windows).
-
-## Documentation
-
-- [USAGE.md](USAGE.md) - Detailed usage guide, API reference, client examples
-
-## Requirements
-
-- Python 3.11+
-- macOS (ARM64/x86_64), Linux, or Windows
-- espeak-ng (for phonemization)
-- ~2GB disk space (model + dependencies)
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/my-feature`
-3. Make your changes
-4. Run tests: `uv run pytest`
-5. Submit a pull request
+**Payloads:**
+- `{"type": "init", "voice": "af_heart", "speed": 1.0}`
+- `{"type": "text", "chunk": "Hello world.", "is_final": true}`
 
 ## License
 
-Apache 2.0 - See [LICENSE](LICENSE) for details.
-
-## Acknowledgments
-
-- [Kokoro TTS](https://github.com/hexgrad/kokoro) - The TTS model powering Freeman
-- [FastAPI](https://fastapi.tiangolo.com/) - WebSocket server framework
+Apache 2.0

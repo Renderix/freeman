@@ -389,6 +389,7 @@
         <div class="header">
             <h1>🎙️ Kokoro TTS Streamer</h1>
             <p>One sentence at a time - instant audio playback</p>
+            <a href="/settings" style="color: white; opacity: 0.8; font-size: 0.85rem; text-decoration: none; margin-top: 10px; display: inline-block;">⚙️ Settings</a>
         </div>
         
         <div class="content">
@@ -514,8 +515,10 @@
         
         // Initialize WebSocket connection
         function connectWebSocket() {
+            // Use localhost:17000 when opened as file, otherwise use current host
+            const host = window.location.host || 'localhost:17000';
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = `${protocol}//${window.location.host}/ws/tts`;
+            const wsUrl = `${protocol}//${host}/ws/stream`;
             
             ws = new WebSocket(wsUrl);
             ws.binaryType = 'arraybuffer';
@@ -568,17 +571,21 @@
         
         function handleStatusMessage(data) {
             console.log('Status:', data);
-            
-            if (data.status === 'generating') {
+
+            if (data.type === 'init_ack') {
+                statusText.textContent = 'Session ready';
+            } else if (data.type === 'text_ack') {
+                statusText.textContent = 'Processing...';
+            } else if (data.type === 'sentence_start') {
                 statusText.textContent = 'Generating...';
                 generationStartTime = Date.now();
                 latencyContainer.style.display = 'block';
                 latencyText.textContent = '...';
-            } else if (data.status === 'complete') {
+            } else if (data.type === 'sentence_complete') {
                 const totalTime = Date.now() - generationStartTime;
                 statusText.textContent = 'Done!';
                 latencyText.textContent = totalTime + 'ms';
-                
+            } else if (data.type === 'stream_end') {
                 // Auto clear text after successful generation
                 setTimeout(() => {
                     if (textInput.value) {
@@ -587,9 +594,9 @@
                         textInput.focus();
                     }
                 }, 1000);
-                
+
                 resetUI();
-            } else if (data.status === 'error') {
+            } else if (data.type === 'error') {
                 showError(data.message);
                 resetUI();
             }
@@ -633,14 +640,21 @@
             hideError();
             currentAudioData = null;
             
-            // Send request
-            const request = {
-                text: text,
+            // Send init message first, then text
+            const initMsg = {
+                type: 'init',
                 voice: voiceSelect.value,
                 speed: parseFloat(speedRange.value)
             };
-            
-            ws.send(JSON.stringify(request));
+            ws.send(JSON.stringify(initMsg));
+
+            // Send text message
+            const textMsg = {
+                type: 'text',
+                chunk: text,
+                is_final: true
+            };
+            ws.send(JSON.stringify(textMsg));
         }
         
         function addToHistory(text, audioBlob) {
@@ -710,8 +724,26 @@
             errorMessage.classList.remove('show');
         }
         
+        // Load saved settings from server
+        async function loadSettings() {
+            try {
+                const response = await fetch('/api/settings');
+                const settings = await response.json();
+                if (settings.voice) {
+                    voiceSelect.value = settings.voice;
+                }
+                if (settings.speed) {
+                    speedRange.value = settings.speed;
+                    speedValue.textContent = settings.speed + 'x';
+                }
+            } catch (error) {
+                console.log('Using default settings');
+            }
+        }
+
         // Initialize on page load
         window.addEventListener('load', () => {
+            loadSettings();
             connectWebSocket();
             textInput.focus();
         });

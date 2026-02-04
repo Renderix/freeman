@@ -1,0 +1,15 @@
+server:
+  port: 17000
+
+model:
+  dir: "./models"
+  model_file: "model.onnx"
+  voices_file: "voices.bin"
+  tokens_file: "tokens.txt"
+  data_dir: "espeak-ng-data"
+
+tts:
+  default_voice: "af_heart"
+  default_speed: 1.0
+  max_sentence_chars: 150
+  partial_sentence_timeout_sec: 2.0

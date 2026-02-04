@@ -1,28 +1,28 @@
-# Python artifacts
-__pycache__/
-*.py[cod]
-*$py.class
+# Binary
+freeman-go
+freeman
+
+# Models (download via scripts/setup_go_models.sh)
+models/*.onnx
+models/*.bin
+models/*.tar.bz2
+models/espeak-ng-data/
+
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
 *.so
-*.egg
-*.egg-info/
-.eggs/
+*.dylib
 
-# Virtual environments
-venv/
-.venv/
-env/
-ENV/
+# Test binary
+*.test
 
-# Nuitka build artifacts
-nuitka-crash-report.xml
-*.build/
-*.dist/
-*.onefile-build/
-dist/
+# Output of go coverage
+*.out
 
-# Runtime/logs
-*.log
-server.log
+# Dependency directories
+vendor/
 
 # IDE/Editor
 .vscode/
@@ -40,13 +40,8 @@ Thumbs.db
 .env.local
 .env.*.local
 
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
-.nox/
+# Logs
+*.log
 
-# Type checking
-.mypy_cache/
-.pytype/
+# User settings (local only)
+# ~/.config/freeman/ is used instead
