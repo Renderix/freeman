@@ -32,19 +32,17 @@ sudo apt install espeak-ng
 ```bash
 git clone https://github.com/Renderix/freeman.git
 cd freeman
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+uv sync
 ```
 
 ### Run
 
 ```bash
 # Start the TTS server
-python -m src.cli start --port 17000
+uv run python -m src.cli start --port 17000
 
 # Or start the configuration UI
-python -m src.cli setup --port 8000
+uv run python -m src.cli setup --port 8000
 ```
 
 ### Test
@@ -127,11 +125,8 @@ Pre-built binaries for macOS, Linux, and Windows are available on the [Releases 
 ### Build from Source
 
 ```bash
-# Install build dependencies (already in requirements.txt)
-pip install -r requirements.txt
-
 # Build standalone executable
-python build.py
+uv run python build.py
 ```
 
 The binary will be created at `dist/freeman` (or `dist/freeman.exe` on Windows).
@@ -152,7 +147,7 @@ The binary will be created at `dist/freeman` (or `dist/freeman.exe` on Windows).
 1. Fork the repository
 2. Create a feature branch: `git checkout -b feature/my-feature`
 3. Make your changes
-4. Run tests: `python -m pytest tests/`
+4. Run tests: `uv run pytest`
 5. Submit a pull request
 
 ## License

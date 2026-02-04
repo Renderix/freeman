@@ -50,13 +50,8 @@ sudo dnf install espeak-ng
 git clone https://github.com/yourname/freeman.git
 cd freeman
 
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # Linux/macOS
-# or: venv\Scripts\activate  # Windows
-
-# Install dependencies
-pip install -r requirements.txt
+# Setup environment and install dependencies
+uv sync
 ```
 
 ### Binary Installation (Future)
@@ -78,7 +73,7 @@ sudo mv freeman /usr/local/bin/
 ### Start the Server
 
 ```bash
-python -m src.cli start --port 17000
+uv run python -m src.cli start --port 17000
 ```
 
 The server will initialize the Kokoro TTS engine (takes a few seconds on first run) and then listen for WebSocket connections.
@@ -128,7 +123,7 @@ asyncio.run(speak())
 Start the WebSocket TTS server.
 
 ```bash
-python -m src.cli start [OPTIONS]
+uv run python -m src.cli start [OPTIONS]
 ```
 
 **Options:**
@@ -138,7 +133,7 @@ python -m src.cli start [OPTIONS]
 
 **Example:**
 ```bash
-python -m src.cli start --port 8080
+uv run python -m src.cli start --port 8080
 ```
 
 ### `freeman setup`
@@ -146,7 +141,7 @@ python -m src.cli start --port 8080
 Start the configuration web UI.
 
 ```bash
-python -m src.cli setup [OPTIONS]
+uv run python -m src.cli setup [OPTIONS]
 ```
 
 **Options:**
@@ -156,7 +151,7 @@ python -m src.cli setup [OPTIONS]
 
 **Example:**
 ```bash
-python -m src.cli setup --port 9000
+uv run python -m src.cli setup --port 9000
 # Open http://localhost:9000 in browser
 ```
 
@@ -165,7 +160,7 @@ python -m src.cli setup --port 9000
 Show version information.
 
 ```bash
-python -m src.cli version
+uv run python -m src.cli version
 ```
 
 ---
@@ -708,13 +703,13 @@ value = config.get("my_new_option")
 
 ```bash
 # All tests
-python -m pytest tests/
+uv run pytest
 
 # Specific test
-python -m pytest tests/test_sentence_buffer.py -v
+uv run pytest tests/test_sentence_buffer.py -v
 
 # With coverage
-python -m pytest --cov=src tests/
+uv run pytest --cov=src tests/
 ```
 
 ### Code Style
@@ -727,8 +722,7 @@ python -m pytest --cov=src tests/
 ### Building Binary
 
 ```bash
-python build.py --platform macos-arm64
-# Output: dist/freeman-darwin-arm64
+uv run python build.py
 ```
 
 ---
