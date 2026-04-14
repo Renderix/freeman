@@ -40,6 +40,7 @@ func TestSession_HappyPath(t *testing.T) {
 	sidecarStdoutR, sidecarStdoutW := io.Pipe()
 	client := sidecar.NewClientFromPipes(sidecarStdinW, sidecarStdoutR)
 	defer client.Close()
+	defer sidecarStdinW.Close()
 
 	// Stub sidecar goroutine.
 	sidecarDone := make(chan struct{})
@@ -155,13 +156,12 @@ type lineScanner struct {
 	r    io.Reader
 	buf  []byte
 	line []byte
-	err  error
 }
 
 func (s *lineScanner) Scan() bool {
 	s.line = nil
 	for {
-		if i := indexByte(s.buf, '\n'); i >= 0 {
+		if i := bytes.IndexByte(s.buf, '\n'); i >= 0 {
 			s.line = append([]byte(nil), s.buf[:i]...)
 			s.buf = s.buf[i+1:]
 			return true
@@ -179,11 +179,3 @@ func (s *lineScanner) Scan() bool {
 
 func (s *lineScanner) Bytes() []byte { return s.line }
 
-func indexByte(b []byte, c byte) int {
-	for i, x := range b {
-		if x == c {
-			return i
-		}
-	}
-	return -1
-}

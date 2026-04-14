@@ -27,8 +27,11 @@ type Session struct {
 // NewSession constructs a Session.
 func NewSession(deps SessionDeps) *Session {
 	return &Session{
-		deps:      deps,
-		machine:   NewMachine(),
+		deps:    deps,
+		machine: NewMachine(),
+		// Buffer size is a small slack for PM goroutines so they don't
+		// block on send in the common case. Each PM goroutine also
+		// selects on ctx.Done so it cannot leak on session shutdown.
 		pmResults: make(chan Event, 4),
 	}
 }
@@ -86,28 +89,42 @@ func (s *Session) handleSidecarMessage(ctx context.Context, msg sidecar.Message)
 func (s *Session) runEffect(ctx context.Context, e Effect) {
 	switch eff := e.(type) {
 	case SpeakEffect:
+		// NOTE: Speak runs synchronously inside the select loop, so it blocks
+		// all other session events (hotkey, utterances, sidecar) for its
+		// duration. The stdout fake in Plan 1 is trivially fast. Plan 2's
+		// Kokoro TTS must either finish quickly or be moved to a goroutine.
 		_ = s.deps.Speaker.Speak(ctx, eff.Text)
 	case CallPMIntakeEffect:
 		in := eff.Input
 		go func() {
+			var ev Event
 			res, err := s.deps.PM.Intake(ctx, in)
 			if err != nil {
-				s.pmResults <- SidecarError{Message: fmt.Sprintf("pm intake: %v", err)}
-				return
+				ev = SidecarError{Message: fmt.Sprintf("pm intake: %v", err)}
+			} else {
+				ev = res
 			}
-			s.pmResults <- res
+			select {
+			case s.pmResults <- ev:
+			case <-ctx.Done():
+			}
 		}()
 	case CallPMRouteEffect:
 		in := eff.Input
 		id := eff.ID
 		go func() {
+			var ev Event
 			res, err := s.deps.PM.Route(ctx, in)
 			if err != nil {
-				s.pmResults <- SidecarError{Message: fmt.Sprintf("pm route: %v", err)}
-				return
+				ev = SidecarError{Message: fmt.Sprintf("pm route: %v", err)}
+			} else {
+				res.ID = id
+				ev = res
 			}
-			res.ID = id
-			s.pmResults <- res
+			select {
+			case s.pmResults <- ev:
+			case <-ctx.Done():
+			}
 		}()
 	case SendSidecarStartEffect:
 		payload := sidecar.ObjectivePayload{
