@@ -55,6 +55,10 @@ func runCall(cmd *cobra.Command, args []string) error {
 	hkChan := make(chan struct{}, 4)
 	sigChan := make(chan os.Signal, 4)
 	signal.Notify(sigChan, syscall.SIGUSR1)
+	defer func() {
+		signal.Stop(sigChan)
+		close(sigChan)
+	}()
 	go func() {
 		for range sigChan {
 			hkChan <- struct{}{}
