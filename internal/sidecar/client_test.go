@@ -73,7 +73,8 @@ func TestClient_RoundTrip(t *testing.T) {
 
 func TestClient_SendAskUserReply(t *testing.T) {
 	sidecarStdinR, sidecarStdinW := io.Pipe()
-	sidecarStdoutR, _ := io.Pipe()
+	sidecarStdoutR, sidecarStdoutW := io.Pipe()
+	defer sidecarStdoutW.Close()
 
 	client := NewClientFromPipes(sidecarStdinW, sidecarStdoutR)
 	defer client.Close()
@@ -110,9 +111,3 @@ func TestClient_SendAskUserReply(t *testing.T) {
 	}
 }
 
-func trimNewline(b []byte) []byte {
-	for len(b) > 0 && (b[len(b)-1] == '\n' || b[len(b)-1] == '\r') {
-		b = b[:len(b)-1]
-	}
-	return b
-}

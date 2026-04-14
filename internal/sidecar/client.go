@@ -16,6 +16,8 @@ type Client struct {
 	events chan Message
 	closer io.Closer // optional; non-nil when Spawn was used
 	proc   *exec.Cmd // optional
+	ctx    context.Context
+	cancel context.CancelFunc
 	mu     sync.Mutex
 	closed bool
 	wg     sync.WaitGroup
@@ -24,10 +26,13 @@ type Client struct {
 // NewClientFromPipes wires a client to existing stdin/stdout pipes.
 // Use this in tests. In production, call Spawn instead.
 func NewClientFromPipes(stdin io.Writer, stdout io.Reader) *Client {
+	ctx, cancel := context.WithCancel(context.Background())
 	c := &Client{
 		stdin:  stdin,
 		stdout: stdout,
 		events: make(chan Message, 16),
+		ctx:    ctx,
+		cancel: cancel,
 	}
 	c.wg.Add(1)
 	go c.readLoop()
@@ -46,16 +51,21 @@ func Spawn(ctx context.Context, name string, args ...string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("stdout pipe: %w", err)
 	}
-	cmd.Stderr = nil
+	// cmd.Stderr is left as nil, which causes os/exec to use os.DevNull
+	// rather than inheriting the parent stderr. Task 10 will wire a
+	// prefixed writer so sidecar errors are visible in the CLI.
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start: %w", err)
 	}
+	clientCtx, cancel := context.WithCancel(context.Background())
 	c := &Client{
 		stdin:  stdin,
 		stdout: stdout,
 		events: make(chan Message, 16),
 		closer: stdin,
 		proc:   cmd,
+		ctx:    clientCtx,
+		cancel: cancel,
 	}
 	c.wg.Add(1)
 	go c.readLoop()
@@ -81,13 +91,18 @@ func (c *Client) Close() error {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
+		c.wg.Wait()
 		return nil
 	}
 	c.closed = true
 	closer := c.closer
 	proc := c.proc
+	cancel := c.cancel
 	c.mu.Unlock()
 
+	if cancel != nil {
+		cancel()
+	}
 	if closer != nil {
 		_ = closer.Close()
 	}
@@ -95,8 +110,6 @@ func (c *Client) Close() error {
 		_ = proc.Process.Kill()
 		_ = proc.Wait()
 	}
-	// If stdout implements io.Closer (e.g. *io.PipeReader, *os.File), close it
-	// so the readLoop's blocked Read returns immediately.
 	if rc, ok := c.stdout.(io.Closer); ok {
 		_ = rc.Close()
 	}
@@ -116,10 +129,12 @@ func (c *Client) readLoop() {
 		}
 		msg, err := Decode(line)
 		if err != nil {
-			// Wrap as ErrorMsg so the session sees it.
-			c.events <- ErrorMsg{Type: MsgTypeError, Message: err.Error()}
-			continue
+			msg = ErrorMsg{Type: MsgTypeError, Message: err.Error()}
 		}
-		c.events <- msg
+		select {
+		case c.events <- msg:
+		case <-c.ctx.Done():
+			return
+		}
 	}
 }
