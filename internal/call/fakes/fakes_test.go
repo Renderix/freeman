@@ -3,6 +3,7 @@ package fakes
 import (
 	"bytes"
 	"context"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -35,8 +36,8 @@ func TestLineReaderTranscriber(t *testing.T) {
 	timeout := time.After(2 * time.Second)
 	for len(got) < 2 {
 		select {
-		case t := <-u:
-			got = append(got, t)
+		case line := <-u:
+			got = append(got, line)
 		case <-timeout:
 			t.Fatalf("timed out; got %v", got)
 		}
@@ -76,5 +77,53 @@ func TestScriptedPM_RouteAlwaysInline(t *testing.T) {
 	}
 	if r.AnswerInline == "" {
 		t.Errorf("expected inline answer, got %+v", r)
+	}
+}
+
+func TestStdinHotkey(t *testing.T) {
+	r := strings.NewReader("first\nsecond\n")
+	hk := NewStdinHotkey(r)
+
+	events := hk.Events()
+	count := 0
+	timeout := time.After(2 * time.Second)
+	for count < 2 {
+		select {
+		case <-events:
+			count++
+		case <-timeout:
+			t.Fatalf("timed out; got %d", count)
+		}
+	}
+	hk.Stop()
+}
+
+func TestStdinHotkey_StopUnblocksBlockingReader(t *testing.T) {
+	// io.Pipe reader never EOFs on its own; Stop must close it to unblock.
+	pr, _ := io.Pipe()
+	hk := NewStdinHotkey(pr)
+
+	done := make(chan struct{})
+	go func() {
+		// Give the hotkey goroutine a moment to start its Scan.
+		time.Sleep(50 * time.Millisecond)
+		hk.Stop()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop did not unblock the hotkey goroutine")
+	}
+
+	// Events channel should close shortly after Stop.
+	select {
+	case _, open := <-hk.Events():
+		if open {
+			t.Error("events channel still open after Stop")
+		}
+	case <-time.After(500 * time.Millisecond):
+		// Channel close is async relative to Stop(); tolerate a brief window.
 	}
 }

@@ -10,6 +10,14 @@ import (
 	"github.com/Renderix/freeman/internal/call"
 )
 
+// Compile-time checks that each fake implements its port interface.
+var (
+	_ call.Speaker     = (*StdoutSpeaker)(nil)
+	_ call.Transcriber = (*LineReaderTranscriber)(nil)
+	_ call.Hotkey      = (*StdinHotkey)(nil)
+	_ call.PM          = (*ScriptedPM)(nil)
+)
+
 // StdoutSpeaker prints "[tts] <text>" to the given writer.
 type StdoutSpeaker struct {
 	w  io.Writer
@@ -56,6 +64,9 @@ func (t *LineReaderTranscriber) Utterances() <-chan string { return t.out }
 // Stop implements call.Transcriber.
 func (t *LineReaderTranscriber) Stop() {
 	t.once.Do(func() {
+		if rc, ok := t.r.(io.Closer); ok {
+			_ = rc.Close()
+		}
 		close(t.stop)
 	})
 }
@@ -77,8 +88,7 @@ func (t *LineReaderTranscriber) loop() {
 	}
 }
 
-// StdinHotkey reads blank lines (or any line starting with a space) from r
-// and emits a hotkey event for each.
+// StdinHotkey emits one hotkey event per line read from r.
 // For Plan 1 the CLI uses a different input stream for hotkey vs utterances,
 // but tests instantiate this directly.
 type StdinHotkey struct {
@@ -105,6 +115,9 @@ func (h *StdinHotkey) Events() <-chan struct{} { return h.out }
 // Stop implements call.Hotkey.
 func (h *StdinHotkey) Stop() {
 	h.once.Do(func() {
+		if rc, ok := h.r.(io.Closer); ok {
+			_ = rc.Close()
+		}
 		close(h.stop)
 	})
 }
