@@ -277,3 +277,33 @@ func driveToWorking(t *testing.T) *Machine {
 	}
 	return m
 }
+
+func TestIsAffirmative(t *testing.T) {
+	positives := []string{
+		"yes", "yeah", "yep", "go", "just go",
+		"ship it", "do it", "start", "sure",
+	}
+	for _, p := range positives {
+		if !isAffirmative(p) {
+			t.Errorf("isAffirmative(%q) = false, want true", p)
+		}
+	}
+
+	// Case-insensitive and whitespace-trimmed variants.
+	variants := []string{"YES", "  just go  ", "Ship It", "SURE"}
+	for _, v := range variants {
+		if !isAffirmative(v) {
+			t.Errorf("isAffirmative(%q) = false, want true", v)
+		}
+	}
+
+	negatives := []string{
+		"", "no", "not yet", "yes please", "go ahead",
+		"maybe", "nope", "yeah but", "cancel",
+	}
+	for _, n := range negatives {
+		if isAffirmative(n) {
+			t.Errorf("isAffirmative(%q) = true, want false", n)
+		}
+	}
+}

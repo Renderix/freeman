@@ -98,6 +98,9 @@ func (m *Machine) handleWorking(e Event) []Effect {
 	case SidecarAssistantText:
 		return []Effect{}
 	case SidecarAskUser:
+		if m.objective == nil {
+			return []Effect{}
+		}
 		m.pendingAskUserID = ev.ID
 		return []Effect{CallPMRouteEffect{
 			ID: ev.ID,
