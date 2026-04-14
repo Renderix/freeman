@@ -112,3 +112,94 @@ func TestEncodeAskUserReply(t *testing.T) {
 		t.Errorf("missing id: %s", line)
 	}
 }
+
+func TestEncodeDecodeStartRoundTrip(t *testing.T) {
+	orig := StartMsg{
+		Type: MsgTypeStart,
+		Objective: ObjectivePayload{
+			Goal:               "build flag",
+			AcceptanceCriteria: []string{"tests pass", "no regressions"},
+			Constraints:        []string{"no db changes"},
+			Notes:              []string{"ship soon"},
+			Model:              "sonnet",
+		},
+	}
+	var buf bytes.Buffer
+	if err := Encode(&buf, orig); err != nil {
+		t.Fatal(err)
+	}
+	line := bytes.TrimRight(buf.Bytes(), "\n")
+	m, err := Decode(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := m.(StartMsg)
+	if !ok {
+		t.Fatalf("got %T, want StartMsg", m)
+	}
+	if got.Type != "start" {
+		t.Errorf("type = %q", got.Type)
+	}
+	if got.Objective.Goal != orig.Objective.Goal {
+		t.Errorf("goal = %q", got.Objective.Goal)
+	}
+	if len(got.Objective.AcceptanceCriteria) != 2 || got.Objective.AcceptanceCriteria[1] != "no regressions" {
+		t.Errorf("acceptance_criteria = %v", got.Objective.AcceptanceCriteria)
+	}
+	if len(got.Objective.Constraints) != 1 || got.Objective.Constraints[0] != "no db changes" {
+		t.Errorf("constraints = %v", got.Objective.Constraints)
+	}
+	if len(got.Objective.Notes) != 1 || got.Objective.Notes[0] != "ship soon" {
+		t.Errorf("notes = %v", got.Objective.Notes)
+	}
+	if got.Objective.Model != "sonnet" {
+		t.Errorf("model = %q", got.Objective.Model)
+	}
+}
+
+func TestEncodeDecodeAskUserReplyRoundTrip(t *testing.T) {
+	orig := AskUserReplyMsg{Type: MsgTypeAskUserReply, ID: "q1", Answer: "yes"}
+	var buf bytes.Buffer
+	if err := Encode(&buf, orig); err != nil {
+		t.Fatal(err)
+	}
+	line := bytes.TrimRight(buf.Bytes(), "\n")
+	m, err := Decode(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := m.(AskUserReplyMsg)
+	if !ok {
+		t.Fatalf("got %T, want AskUserReplyMsg", m)
+	}
+	if got.ID != "q1" || got.Answer != "yes" {
+		t.Errorf("got %+v", got)
+	}
+}
+
+func TestEncodeDecodeCancelRoundTrip(t *testing.T) {
+	orig := CancelMsg{Type: MsgTypeCancel}
+	var buf bytes.Buffer
+	if err := Encode(&buf, orig); err != nil {
+		t.Fatal(err)
+	}
+	line := bytes.TrimRight(buf.Bytes(), "\n")
+	m, err := Decode(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.(CancelMsg); !ok {
+		t.Fatalf("got %T, want CancelMsg", m)
+	}
+}
+
+func TestDecodeCancel(t *testing.T) {
+	line := `{"type":"cancel"}`
+	m, err := Decode([]byte(line))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.(CancelMsg); !ok {
+		t.Fatalf("got %T, want CancelMsg", m)
+	}
+}
