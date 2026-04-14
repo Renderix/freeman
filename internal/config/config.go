@@ -26,6 +26,43 @@ type Config struct {
 		MaxSentenceChars          int     `yaml:"max_sentence_chars"`
 		PartialSentenceTimeoutSec float64 `yaml:"partial_sentence_timeout_sec"`
 	} `yaml:"tts"`
+
+	Freeman FreemanConfig `yaml:"freeman"`
+}
+
+type FreemanConfig struct {
+	PM      PMConfig      `yaml:"pm"`
+	Worker  WorkerConfig  `yaml:"worker"`
+	STT     STTConfig     `yaml:"stt"`
+	Hotkey  string        `yaml:"hotkey"`
+	Logging LoggingConfig `yaml:"logging"`
+}
+
+type PMConfig struct {
+	Model               string  `yaml:"model"`
+	ConfidenceThreshold float64 `yaml:"confidence_threshold"`
+	APIKeyEnv           string  `yaml:"api_key_env"`
+}
+
+type WorkerConfig struct {
+	DefaultModel string `yaml:"default_model"`
+	OpusModel    string `yaml:"opus_model"`
+	Auth         string `yaml:"auth"`
+}
+
+type STTConfig struct {
+	Model     string    `yaml:"model"`
+	ModelPath string    `yaml:"model_path"`
+	VAD       VADConfig `yaml:"vad"`
+}
+
+type VADConfig struct {
+	SilenceMS   int `yaml:"silence_ms"`
+	MinSpeechMS int `yaml:"min_speech_ms"`
+}
+
+type LoggingConfig struct {
+	TranscriptDir string `yaml:"transcript_dir"`
 }
 
 var DefaultConfig = Config{
@@ -58,6 +95,30 @@ var DefaultConfig = Config{
 		MaxSentenceChars:          150,
 		PartialSentenceTimeoutSec: 2.0,
 	},
+	Freeman: FreemanConfig{
+		PM: PMConfig{
+			Model:               "claude-haiku-4-5",
+			ConfidenceThreshold: 0.8,
+			APIKeyEnv:           "ANTHROPIC_API_KEY",
+		},
+		Worker: WorkerConfig{
+			DefaultModel: "claude-sonnet-4-6",
+			OpusModel:    "claude-opus-4-6",
+			Auth:         "subscription",
+		},
+		STT: STTConfig{
+			Model:     "whisper-large-v3-turbo",
+			ModelPath: "./models/whisper/ggml-large-v3-turbo.bin",
+			VAD: VADConfig{
+				SilenceMS:   800,
+				MinSpeechMS: 300,
+			},
+		},
+		Hotkey: "option+space",
+		Logging: LoggingConfig{
+			TranscriptDir: "./.freeman/transcripts",
+		},
+	},
 }
 
 // LoadConfig loads configuration from config.yaml or returns defaults.
@@ -68,8 +129,6 @@ func LoadConfig(configPath string) Config {
 
 	file, err := os.ReadFile(configPath)
 	if err != nil {
-		// Fallback to searching in standard locations if needed,
-		// but here we just return defaults if local file is missing.
 		return DefaultConfig
 	}
 
