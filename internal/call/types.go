@@ -12,13 +12,15 @@ type Objective struct {
 
 // IntakeInput is what the session hands the PM on each intake call.
 type IntakeInput struct {
-	Transcript []string // alternating user/PM utterances, oldest first
-	Latest     string   // the most recent user utterance
+	Transcript      []string // alternating user/PM utterances, oldest first
+	Latest          string   // the most recent user utterance
+	InterruptedText string   // what Freeman was saying when user interrupted; empty if no barge-in
 }
 
 // RouteInput is what the session hands the PM on each ask_user routing call.
 type RouteInput struct {
-	Objective  Objective
-	Transcript []string
-	Question   string
+	Objective       Objective
+	Transcript      []string
+	Question        string
+	InterruptedText string // what Freeman was saying when user interrupted; empty if no barge-in
 }

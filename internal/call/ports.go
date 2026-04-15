@@ -21,6 +21,8 @@ type Speaker interface {
 type PM interface {
 	Intake(ctx context.Context, in IntakeInput) (PMIntakeResult, error)
 	Route(ctx context.Context, in RouteInput) (PMRouteResult, error)
+	// Reset clears conversation history. Called at the start of every new call.
+	Reset()
 }
 
 // Hotkey emits an event whenever the call hotkey is pressed.

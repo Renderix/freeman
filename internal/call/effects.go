@@ -42,3 +42,9 @@ type SendSidecarReplyEffect struct {
 }
 
 func (SendSidecarReplyEffect) isEffect() {}
+
+// ResetPMEffect tells the session to call PM.Reset(), clearing conversation history.
+// Emitted by the machine when entering Intake from Idle (new call begins).
+type ResetPMEffect struct{}
+
+func (ResetPMEffect) isEffect() {}

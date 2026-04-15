@@ -10,7 +10,8 @@ func (HotkeyPress) isEvent() {}
 
 // UserUtterance is a finalized transcript from the user.
 type UserUtterance struct {
-	Text string
+	Text            string
+	InterruptedText string // non-empty when user barged in during Freeman's speech
 }
 
 func (UserUtterance) isEvent() {}

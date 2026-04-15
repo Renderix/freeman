@@ -9,11 +9,12 @@ import (
 
 // SessionDeps are the port implementations injected into a Session.
 type SessionDeps struct {
-	Transcriber Transcriber
-	Speaker     Speaker
-	PM          PM
-	Hotkey      Hotkey
-	Sidecar     *sidecar.Client
+	Transcriber  Transcriber
+	Speaker      Speaker
+	PM           PM
+	Hotkey       Hotkey
+	Sidecar      *sidecar.Client
+	SpeechOnsets <-chan struct{} // from vad.VAD.SpeechOnsets(); nil disables barge-in
 }
 
 // Session wires a Machine to its ports and runs the event loop.

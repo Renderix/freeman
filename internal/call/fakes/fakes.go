@@ -174,3 +174,10 @@ func (p *ScriptedPM) Route(ctx context.Context, in call.RouteInput) (call.PMRout
 		AnswerInline: "yes",
 	}, nil
 }
+
+// Reset implements call.PM. Resets intakeCnt so the next call starts fresh.
+func (p *ScriptedPM) Reset() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.intakeCnt = 0
+}
