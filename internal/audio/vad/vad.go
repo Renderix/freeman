@@ -1,0 +1,121 @@
+package vad
+
+import "context"
+
+// Utterance is a completed user speech segment with end-of-speech already detected.
+type Utterance struct {
+	PCM        []int16
+	DurationMs int
+}
+
+// Config tunes the endpointing state machine.
+type Config struct {
+	SilenceMs      int // end-of-speech trigger; default 800
+	MinSpeechMs    int // drop segments shorter than this; default 300
+	HangoverMs     int // keep classifying as speech for this long after last speech frame; default 500
+	Aggressiveness int // webrtcvad 0-3; default 2
+	SampleRate     int // e.g. 16000
+	FrameMs        int // e.g. 20
+}
+
+func (c Config) framesFor(ms int) int {
+	if c.FrameMs == 0 {
+		return 0
+	}
+	return ms / c.FrameMs
+}
+
+// VAD owns the detector and the endpointing SM.
+type VAD struct {
+	cfg Config
+	det Detector
+}
+
+// New returns a VAD backed by the WebRTC detector.
+func New(cfg Config) (*VAD, error) {
+	d, err := NewWebRTCDetector(cfg.Aggressiveness)
+	if err != nil {
+		return nil, err
+	}
+	return NewWithDetector(cfg, d), nil
+}
+
+// NewWithDetector lets tests inject a fake classifier.
+func NewWithDetector(cfg Config, d Detector) *VAD {
+	return &VAD{cfg: cfg, det: d}
+}
+
+// Run consumes 20 ms frames from `in` and emits completed utterances to the
+// returned channel. The channel closes when `in` closes or ctx is canceled.
+func (v *VAD) Run(ctx context.Context, in <-chan []int16) <-chan Utterance {
+	out := make(chan Utterance, 4)
+	go func() {
+		defer close(out)
+
+		state := stateSilent
+		silenceFrames := 0
+		var buf []int16
+
+		silenceLimit := v.cfg.framesFor(v.cfg.SilenceMs)
+		minSpeech := v.cfg.framesFor(v.cfg.MinSpeechMs)
+		bufFrames := 0
+
+		flush := func() {
+			if bufFrames >= minSpeech && len(buf) > 0 {
+				out <- Utterance{
+					PCM:        buf,
+					DurationMs: bufFrames * v.cfg.FrameMs,
+				}
+			}
+			buf = nil
+			bufFrames = 0
+			silenceFrames = 0
+			state = stateSilent
+		}
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case frame, ok := <-in:
+				if !ok {
+					flush()
+					return
+				}
+				isSpeech, err := v.det.IsSpeech(frame, v.cfg.SampleRate)
+				if err != nil {
+					continue
+				}
+				switch state {
+				case stateSilent:
+					if isSpeech {
+						state = stateSpeech
+						buf = append(buf, frame...)
+						bufFrames++
+						silenceFrames = 0
+					}
+				case stateSpeech:
+					if isSpeech {
+						buf = append(buf, frame...)
+						bufFrames++
+						silenceFrames = 0
+					} else {
+						silenceFrames++
+						if silenceFrames >= silenceLimit {
+							// End of speech: emit only the speech frames (no trailing silence).
+							flush()
+						}
+					}
+				}
+			}
+		}
+	}()
+	return out
+}
+
+type state int
+
+const (
+	stateSilent state = iota
+	stateSpeech
+)
