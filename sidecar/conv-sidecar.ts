@@ -87,6 +87,7 @@ export function runConvSidecar(
   const createSession = deps.createSession ?? createAgentSession;
 
   let session: AgentSession | null = null;
+  let unsubscribeAssistant: (() => void) | null = null;
   let currentUserSayId: string | null = null;
   const pendingToolCalls = new Map<string, (result: any) => void>();
 
@@ -97,7 +98,8 @@ export function runConvSidecar(
       description,
       parameters: paramSchema,
       execute: async (_toolCallId, args) => {
-        if (currentUserSayId === null) {
+        const turnId = currentUserSayId;
+        if (turnId === null) {
           return {
             content: [{ type: "text", text: JSON.stringify({ ok: false, error: "no active turn" }) }],
             details: {},
@@ -108,7 +110,7 @@ export function runConvSidecar(
           pendingToolCalls.set(callId, resolve);
           send(out, {
             type: "tool_call",
-            id: currentUserSayId,
+            id: turnId,
             call_id: callId,
             name,
             args,
@@ -158,6 +160,9 @@ export function runConvSidecar(
     });
     await loader.reload();
 
+    unsubscribeAssistant?.();
+    unsubscribeAssistant = null;
+
     const created = await createSession({
       model: getModel("anthropic", msg.model as never),
       tools: [],
@@ -169,7 +174,7 @@ export function runConvSidecar(
 
     // Subscribe once for the lifetime of the session: stream assistant
     // text deltas to Go as assistant_say events.
-    session.subscribe((event: any) => {
+    unsubscribeAssistant = session.subscribe((event: any) => {
       if (event.type === "message_update") {
         const ame = event.assistantMessageEvent;
         if (ame && ame.type === "text_delta" && typeof ame.delta === "string") {
