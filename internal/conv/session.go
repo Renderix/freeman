@@ -90,8 +90,12 @@ type Session struct {
 	turnCanceled  bool
 
 	// speak goroutine state, owned by Run.
-	cancelSpeak func()
-	speakDone   chan struct{}
+	cancelSpeak  func()
+	speakDone    chan struct{}
+	speakRequests chan string
+
+	// one assistantBuffer per session; reset on each turn start.
+	assistantBuf *assistantBuffer
 
 	wg sync.WaitGroup
 }
@@ -125,13 +129,15 @@ func NewSession(ctx context.Context, deps Deps) (*Session, error) {
 	}
 
 	s := &Session{
-		deps:      deps,
-		log:       log,
-		cmd:       cmd,
-		stdin:     stdin,
-		stdout:    stdout,
-		pending:   make(map[string]chan inboundMsg),
-		speakDone: make(chan struct{}, 1),
+		deps:          deps,
+		log:           log,
+		cmd:           cmd,
+		stdin:         stdin,
+		stdout:        stdout,
+		pending:       make(map[string]chan inboundMsg),
+		speakDone:     make(chan struct{}, 1),
+		speakRequests: make(chan string, 16),
+		assistantBuf:  &assistantBuffer{},
 	}
 
 	s.wg.Add(1)
@@ -265,7 +271,7 @@ func (s *Session) Run(ctx context.Context) error {
 
 	// On hotkey, send a synthetic seed user_say so the LLM produces a greeting.
 	greet := func() {
-		s.dispatchUserSay(ctx, "<call started>", currentTaskState)
+		s.dispatchUserSay("<call started>", currentTaskState)
 	}
 
 	for {
@@ -283,7 +289,7 @@ func (s *Session) Run(ctx context.Context) error {
 				continue
 			}
 			s.log.Info("heard", "text", text)
-			s.dispatchUserSay(ctx, text, currentTaskState)
+			s.dispatchUserSay(text, currentTaskState)
 
 		case ev, ok := <-taskEvents:
 			if !ok {
@@ -292,6 +298,9 @@ func (s *Session) Run(ctx context.Context) error {
 			}
 			currentTaskState = ev.State
 			s.log.Info("task state", "kind", ev.State.Kind.String())
+
+		case text := <-s.speakRequests:
+			s.startSpeak(text)
 
 		case <-s.speakDone:
 			s.cancelSpeak = nil
@@ -307,7 +316,7 @@ func (s *Session) Run(ctx context.Context) error {
 	}
 }
 
-func (s *Session) dispatchUserSay(ctx context.Context, text string, state TaskState) {
+func (s *Session) dispatchUserSay(text string, state TaskState) {
 	id := s.nextRequestID()
 	s.setTurn(id)
 	payload := userSayMsg{
@@ -319,7 +328,6 @@ func (s *Session) dispatchUserSay(ctx context.Context, text string, state TaskSt
 	if err := s.send(payload); err != nil {
 		s.log.Error("conv send user_say", "err", err)
 	}
-	_ = ctx
 }
 
 func (s *Session) setTurn(id string) {
@@ -385,14 +393,11 @@ func (b *assistantBuffer) drain() string {
 	return out
 }
 
-// One buffer per session; reset on each turn start.
-var globalAssistantBuf = &assistantBuffer{}
-
 func (s *Session) handleAssistantSay(msg inboundMsg) {
 	if !s.turnActive(msg.ID) {
 		return
 	}
-	sentences := globalAssistantBuf.appendAndFlush(msg.Text)
+	sentences := s.assistantBuf.appendAndFlush(msg.Text)
 	for _, sent := range sentences {
 		s.speakSentence(sent)
 	}
@@ -400,22 +405,32 @@ func (s *Session) handleAssistantSay(msg inboundMsg) {
 
 func (s *Session) handleTurnEnd(msg inboundMsg) {
 	if !s.turnActive(msg.ID) {
-		globalAssistantBuf.drain()
+		s.assistantBuf.drain()
 		return
 	}
-	if rest := globalAssistantBuf.drain(); rest != "" {
+	if rest := s.assistantBuf.drain(); rest != "" {
 		s.speakSentence(rest)
 	}
 }
 
-// speakSentence enqueues a sentence to the Speaker. Speaker.Speak is
-// blocking, so we run it in its own goroutine. cancelSpeak is updated
-// by the goroutine via the Run loop (speakDone channel).
-//
-// In v1 we accept a small race: if barge-in fires between speakSentence
-// goroutines, the second one may still run. Live testing will tell us
-// whether this is acceptable.
+// speakSentence enqueues text onto speakRequests for the Run goroutine
+// to process. If the buffer is full the sentence is dropped with a warning.
 func (s *Session) speakSentence(text string) {
+	select {
+	case s.speakRequests <- text:
+	default:
+		s.log.Warn("speakRequests buffer full, dropping sentence", "text", text)
+	}
+}
+
+// startSpeak is called exclusively from the Run goroutine. It cancels any
+// in-flight speech, then launches a new Speak goroutine for text.
+// cancelSpeak is only ever written here, so reads in the same goroutine
+// (speakDone and speechOnsets cases) are race-free.
+func (s *Session) startSpeak(text string) {
+	if s.cancelSpeak != nil {
+		s.cancelSpeak()
+	}
 	s.log.Info("speaking", "text", text)
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancelSpeak = cancel
