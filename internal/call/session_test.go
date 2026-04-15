@@ -3,6 +3,7 @@ package call_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -179,3 +180,201 @@ func (s *lineScanner) Scan() bool {
 
 func (s *lineScanner) Bytes() []byte { return s.line }
 
+// TestSession_BargeinCancelsSpeak: inject SpeakEffect, then send a speech onset
+// before Speak completes. Assert the next UserUtterance carries InterruptedText.
+func TestSession_BargeinCancelsSpeak(t *testing.T) {
+	// Sidecar pipes (not used in this test but NewSession requires a *sidecar.Client).
+	scStdinR, scStdinW := io.Pipe()
+	scStdoutR, scStdoutW := io.Pipe()
+	defer scStdinW.Close()
+	defer scStdoutW.Close()
+	defer scStdoutR.Close()
+	defer scStdinR.Close()
+	sc := sidecar.NewClientFromPipes(scStdinW, scStdoutR)
+	defer sc.Close()
+
+	var speakerBuf syncBuffer
+	// slowSpeaker blocks until its context is canceled, simulating long TTS.
+	slowSpeaker := &slowCancelSpeaker{buf: &speakerBuf}
+
+	trInput, trWriter := io.Pipe()
+	tr := fakes.NewLineReaderTranscriber(trInput)
+	defer tr.Stop()
+
+	hkInput, hkWriter := io.Pipe()
+	hk := fakes.NewStdinHotkey(hkInput)
+	defer hk.Stop()
+
+	pm := fakes.NewScriptedPM()
+	onsets := make(chan struct{}, 1)
+
+	session := call.NewSession(call.SessionDeps{
+		Transcriber:  tr,
+		Speaker:      slowSpeaker,
+		PM:           pm,
+		Hotkey:       hk,
+		Sidecar:      sc,
+		SpeechOnsets: onsets,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- session.Run(ctx) }()
+
+	// Press hotkey → enters Intake, greeting SpeakEffect fires (async).
+	_, _ = hkWriter.Write([]byte("\n"))
+
+	// Wait for Speak to have started (slowSpeaker sets a flag).
+	if !slowSpeaker.waitStarted(time.Second) {
+		t.Fatal("Speak never started")
+	}
+
+	// Fire a speech onset — this should cancel the in-flight Speak.
+	onsets <- struct{}{}
+
+	// Wait for Speak to have been canceled.
+	if !slowSpeaker.waitCanceled(time.Second) {
+		t.Fatal("Speak was not canceled after onset")
+	}
+
+	// Send an utterance — it should carry InterruptedText.
+	_, _ = trWriter.Write([]byte("build a feature flag\n"))
+
+	// PM will be called; wait for the follow-up question (NeedsMore=true).
+	waitFor(t, &speakerBuf, "constraints", time.Second)
+
+	cancel()
+	<-runDone
+}
+
+// TestSession_NoInterruptedTextWithoutBargein: Speak completes normally;
+// the next UserUtterance has empty InterruptedText.
+func TestSession_NoInterruptedTextWithoutBargein(t *testing.T) {
+	scStdinR, scStdinW := io.Pipe()
+	scStdoutR, scStdoutW := io.Pipe()
+	defer scStdinW.Close()
+	defer scStdoutW.Close()
+	defer scStdoutR.Close()
+	defer scStdinR.Close()
+	sc := sidecar.NewClientFromPipes(scStdinW, scStdoutR)
+	defer sc.Close()
+
+	var speakerBuf syncBuffer
+	speaker := fakes.NewStdoutSpeaker(&speakerBuf)
+
+	trInput, trWriter := io.Pipe()
+	tr := fakes.NewLineReaderTranscriber(trInput)
+	defer tr.Stop()
+
+	hkInput, hkWriter := io.Pipe()
+	hk := fakes.NewStdinHotkey(hkInput)
+	defer hk.Stop()
+
+	pm := &recordingPM{inner: fakes.NewScriptedPM()}
+	onsets := make(chan struct{}, 1) // never sent
+
+	session := call.NewSession(call.SessionDeps{
+		Transcriber:  tr,
+		Speaker:      speaker,
+		PM:           pm,
+		Hotkey:       hk,
+		Sidecar:      sc,
+		SpeechOnsets: onsets,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- session.Run(ctx) }()
+
+	_, _ = hkWriter.Write([]byte("\n"))
+	waitFor(t, &speakerBuf, "what are we building", time.Second)
+
+	_, _ = trWriter.Write([]byte("build a feature flag\n"))
+	waitFor(t, &speakerBuf, "constraints", time.Second)
+
+	if pm.lastInterruptedText() != "" {
+		t.Errorf("InterruptedText = %q, want empty", pm.lastInterruptedText())
+	}
+
+	cancel()
+	<-runDone
+}
+
+// slowCancelSpeaker blocks until its context is canceled, then returns.
+// Used to simulate long TTS that can be barged in on.
+type slowCancelSpeaker struct {
+	buf     *syncBuffer
+	mu      sync.Mutex
+	started bool
+	done    bool
+}
+
+func (s *slowCancelSpeaker) Speak(ctx context.Context, text string) error {
+	s.mu.Lock()
+	s.started = true
+	s.mu.Unlock()
+	_, _ = fmt.Fprintf(s.buf, "[tts] %s\n", text)
+	<-ctx.Done()
+	s.mu.Lock()
+	s.done = true
+	s.mu.Unlock()
+	return ctx.Err()
+}
+
+func (s *slowCancelSpeaker) waitStarted(d time.Duration) bool {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		s.mu.Lock()
+		v := s.started
+		s.mu.Unlock()
+		if v {
+			return true
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return false
+}
+
+func (s *slowCancelSpeaker) waitCanceled(d time.Duration) bool {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		s.mu.Lock()
+		v := s.done
+		s.mu.Unlock()
+		if v {
+			return true
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return false
+}
+
+// recordingPM wraps ScriptedPM and records the last IntakeInput.
+type recordingPM struct {
+	inner *fakes.ScriptedPM
+	mu    sync.Mutex
+	last  call.IntakeInput
+}
+
+func (p *recordingPM) Intake(ctx context.Context, in call.IntakeInput) (call.PMIntakeResult, error) {
+	p.mu.Lock()
+	p.last = in
+	p.mu.Unlock()
+	return p.inner.Intake(ctx, in)
+}
+
+func (p *recordingPM) Route(ctx context.Context, in call.RouteInput) (call.PMRouteResult, error) {
+	return p.inner.Route(ctx, in)
+}
+
+func (p *recordingPM) Reset() { p.inner.Reset() }
+
+func (p *recordingPM) lastInterruptedText() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.last.InterruptedText
+}

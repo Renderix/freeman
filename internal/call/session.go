@@ -23,17 +23,21 @@ type Session struct {
 	machine *Machine
 	// internal channel for PM results so they interleave with external events.
 	pmResults chan Event
+
+	// Async Speak state — read/written only from the Run goroutine; no mutex.
+	cancelSpeak      func()        // non-nil when a Speak goroutine is in flight
+	currentSpeakText string        // text being spoken; stored for interrupted-text context
+	speakDone        chan struct{} // Speak goroutine sends here when it finishes
+	interruptedText  string        // set on barge-in; attached to next UserUtterance
 }
 
 // NewSession constructs a Session.
 func NewSession(deps SessionDeps) *Session {
 	return &Session{
-		deps:    deps,
-		machine: NewMachine(),
-		// Buffer size is a small slack for PM goroutines so they don't
-		// block on send in the common case. Each PM goroutine also
-		// selects on ctx.Done so it cannot leak on session shutdown.
+		deps:      deps,
+		machine:   NewMachine(),
 		pmResults: make(chan Event, 4),
+		speakDone: make(chan struct{}, 1),
 	}
 }
 
@@ -43,26 +47,50 @@ func (s *Session) Run(ctx context.Context) error {
 	hotkeys := s.deps.Hotkey.Events()
 	sidecarEvents := s.deps.Sidecar.Events()
 
+	// Convert nil SpeechOnsets to a channel that never fires.
+	speechOnsets := s.deps.SpeechOnsets
+	if speechOnsets == nil {
+		speechOnsets = make(chan struct{})
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
+
 		case <-hotkeys:
 			s.handleEvent(ctx, HotkeyPress{})
+
 		case text, ok := <-utterances:
 			if !ok {
 				utterances = nil
 				continue
 			}
-			s.handleEvent(ctx, UserUtterance{Text: text})
+			ev := UserUtterance{Text: text, InterruptedText: s.interruptedText}
+			s.interruptedText = ""
+			s.handleEvent(ctx, ev)
+
 		case msg, ok := <-sidecarEvents:
 			if !ok {
 				sidecarEvents = nil
 				continue
 			}
 			s.handleSidecarMessage(ctx, msg)
+
 		case ev := <-s.pmResults:
 			s.handleEvent(ctx, ev)
+
+		case <-s.speakDone:
+			s.cancelSpeak = nil
+			s.currentSpeakText = ""
+
+		case <-speechOnsets:
+			if s.cancelSpeak != nil {
+				s.interruptedText = s.currentSpeakText
+				s.cancelSpeak()
+				s.cancelSpeak = nil
+				s.currentSpeakText = ""
+			}
 		}
 	}
 }
@@ -90,11 +118,22 @@ func (s *Session) handleSidecarMessage(ctx context.Context, msg sidecar.Message)
 func (s *Session) runEffect(ctx context.Context, e Effect) {
 	switch eff := e.(type) {
 	case SpeakEffect:
-		// NOTE: Speak runs synchronously inside the select loop, so it blocks
-		// all other session events (hotkey, utterances, sidecar) for its
-		// duration. The stdout fake in Plan 1 is trivially fast. Plan 2's
-		// Kokoro TTS must either finish quickly or be moved to a goroutine.
-		_ = s.deps.Speaker.Speak(ctx, eff.Text)
+		ctx2, cancel := context.WithCancel(ctx)
+		s.cancelSpeak = cancel
+		s.currentSpeakText = eff.Text
+		go func() {
+			_ = s.deps.Speaker.Speak(ctx2, eff.Text)
+			cancel() // idempotent: safe to call even if already canceled
+			select {
+			case s.speakDone <- struct{}{}:
+			default:
+			}
+		}()
+
+	case ResetPMEffect:
+		s.deps.PM.Reset()
+		s.interruptedText = ""
+
 	case CallPMIntakeEffect:
 		in := eff.Input
 		go func() {
@@ -110,6 +149,7 @@ func (s *Session) runEffect(ctx context.Context, e Effect) {
 			case <-ctx.Done():
 			}
 		}()
+
 	case CallPMRouteEffect:
 		in := eff.Input
 		id := eff.ID
@@ -127,6 +167,7 @@ func (s *Session) runEffect(ctx context.Context, e Effect) {
 			case <-ctx.Done():
 			}
 		}()
+
 	case SendSidecarStartEffect:
 		payload := sidecar.ObjectivePayload{
 			Goal:               eff.Objective.Goal,
@@ -139,6 +180,7 @@ func (s *Session) runEffect(ctx context.Context, e Effect) {
 			Type:      sidecar.MsgTypeStart,
 			Objective: payload,
 		})
+
 	case SendSidecarReplyEffect:
 		_ = s.deps.Sidecar.Send(sidecar.AskUserReplyMsg{
 			Type:   sidecar.MsgTypeAskUserReply,
