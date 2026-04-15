@@ -50,6 +50,31 @@ Connect to `ws://localhost:17000/ws/stream`.
 - `{"type": "init", "voice": "af_heart", "speed": 1.0}`
 - `{"type": "text", "chunk": "Hello world.", "is_final": true}`
 
+## Plan 2 — Voice I/O prerequisites
+
+`freeman call` (without `--fake-audio`) requires:
+
+1. **whisper.cpp `whisper-server`** — install via Homebrew or build from source:
+   ```
+   brew install whisper-cpp          # provides whisper-server in PATH
+   # or
+   git clone https://github.com/ggerganov/whisper.cpp
+   cd whisper.cpp && make server
+   # copy the resulting server binary onto your PATH or set
+   # freeman.stt.server_path in config.yaml
+   ```
+
+2. **Whisper model file** — download with the provided script:
+   ```
+   ./scripts/setup_whisper_model.sh
+   ```
+
+3. **Microphone permission** — on first run, macOS will prompt to grant Freeman
+   access. If you decline, Freeman exits with a message pointing at
+   `System Settings → Privacy & Security → Microphone`.
+
+After that, `./freeman call`, wait for `freeman: ready`, and press Enter.
+
 ## License
 
 Apache 2.0
