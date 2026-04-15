@@ -82,7 +82,10 @@ func runCallWithFakes(ctx context.Context, conf config.Config) error {
 	}()
 	go func() {
 		for range sigChan {
-			hkChan <- struct{}{}
+			select {
+			case hkChan <- struct{}{}:
+			default:
+			}
 		}
 	}()
 	hk := &channelHotkey{ch: hkChan}
@@ -133,7 +136,11 @@ func runCallWithRealAudio(ctx context.Context, conf config.Config) error {
 	if err := mgr.Start(ctx); err != nil {
 		return fmt.Errorf("whisper-server: %w", err)
 	}
-	defer mgr.Stop()
+	defer func() {
+		if err := mgr.Stop(); err != nil {
+			logger.Error("whisper-server stop", "err", err)
+		}
+	}()
 
 	// 4. Mic capture.
 	cap, err := capture.Open(actx, capture.Config{
@@ -168,6 +175,7 @@ func runCallWithRealAudio(ctx context.Context, conf config.Config) error {
 	client := stt.NewClient(mgr.BaseURL(), 10*time.Second)
 	tr := stt.NewTranscriber(client, uttCh, 16000)
 	tr.Run(ctx)
+	defer tr.Stop()
 
 	// 7. Playback Speaker, pointed at the Transcriber as its Muter.
 	sp, err := playback.Open(actx, playback.Config{
@@ -206,6 +214,7 @@ func runCallWithRealAudio(ctx context.Context, conf config.Config) error {
 	fmt.Fprintln(os.Stderr, "freeman: ready")
 
 	// 10. Session (ScriptedPM unchanged).
+	// TODO(Plan 3): replace with real Haiku PM client.
 	pm := fakes.NewScriptedPM()
 	session := call.NewSession(call.SessionDeps{
 		Transcriber: tr,
