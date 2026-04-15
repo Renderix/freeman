@@ -20,6 +20,7 @@ import (
 	"github.com/Renderix/freeman/internal/call/fakes"
 	"github.com/Renderix/freeman/internal/config"
 	"github.com/Renderix/freeman/internal/engine"
+	"github.com/Renderix/freeman/internal/pm"
 	"github.com/Renderix/freeman/internal/sidecar"
 	"github.com/spf13/cobra"
 )
@@ -199,13 +200,13 @@ func runCallWithRealAudio(ctx context.Context, conf config.Config) error {
 	}
 	defer hk.Stop()
 
-	// 9. Stub sidecar (unchanged).
+	// 9. Real sidecar (pi-coding-agent).
 	repoRoot, err := findRepoRoot()
 	if err != nil {
 		return err
 	}
-	stubPath := filepath.Join(repoRoot, "sidecar", "stub.ts")
-	sc, err := sidecar.Spawn(ctx, "bun", "run", stubPath)
+	sidecarPath := filepath.Join(repoRoot, "sidecar", "sidecar.ts")
+	sc, err := sidecar.Spawn(ctx, "bun", "run", sidecarPath)
 	if err != nil {
 		return fmt.Errorf("spawn sidecar: %w", err)
 	}
@@ -213,15 +214,22 @@ func runCallWithRealAudio(ctx context.Context, conf config.Config) error {
 
 	fmt.Fprintln(os.Stderr, "freeman: ready")
 
-	// 10. Session (ScriptedPM unchanged).
-	// TODO(Plan 3): replace with real Haiku PM client.
-	pm := fakes.NewScriptedPM()
+	// 10. Haiku PM.
+	apiKey := os.Getenv(conf.Freeman.PM.APIKeyEnv)
+	haiku := pm.New(pm.Config{
+		APIKey:              apiKey,
+		Model:               conf.Freeman.PM.Model,
+		ConfidenceThreshold: conf.Freeman.PM.ConfidenceThreshold,
+	})
+
+	// 11. Session with speech onsets for barge-in.
 	session := call.NewSession(call.SessionDeps{
-		Transcriber: tr,
-		Speaker:     sp,
-		PM:          pm,
-		Hotkey:      hk,
-		Sidecar:     sc,
+		Transcriber:  tr,
+		Speaker:      sp,
+		PM:           haiku,
+		Hotkey:       hk,
+		Sidecar:      sc,
+		SpeechOnsets: v.SpeechOnsets(),
 	})
 	return session.Run(ctx)
 }
