@@ -13,3 +13,32 @@ tts:
   default_speed: 1.0
   max_sentence_chars: 150
   partial_sentence_timeout_sec: 2.0
+
+freeman:
+  pm:
+    model: claude-haiku-4-5
+    confidence_threshold: 0.8
+    api_key_env: ANTHROPIC_API_KEY
+  worker:
+    default_model: claude-sonnet-4-6
+    opus_model: claude-opus-4-6
+    auth: subscription
+  audio:
+    input_device: ""
+    output_device: ""
+  stt:
+    model: whisper-large-v3-turbo
+    server_path: ""
+    server_port: 0
+    model_path: ./models/whisper/ggml-large-v3-turbo.bin
+    startup_timeout_ms: 10000
+    vad:
+      silence_ms: 800
+      min_speech_ms: 300
+      hangover_ms: 500
+      aggressiveness: 2
+  hotkey:
+    mode: tty
+    key: enter
+  logging:
+    transcript_dir: ./.freeman/transcripts

@@ -30,11 +30,24 @@ type Config struct {
 	Freeman FreemanConfig `yaml:"freeman"`
 }
 
+// AudioConfig selects capture and playback devices.
+type AudioConfig struct {
+	InputDevice  string `yaml:"input_device"`
+	OutputDevice string `yaml:"output_device"`
+}
+
+// HotkeyConfig selects the Plan 2 hotkey implementation.
+type HotkeyConfig struct {
+	Mode string `yaml:"mode"` // "tty" | "stdin-line"
+	Key  string `yaml:"key"`  // "enter" | "space"
+}
+
 type FreemanConfig struct {
 	PM      PMConfig      `yaml:"pm"`
 	Worker  WorkerConfig  `yaml:"worker"`
+	Audio   AudioConfig   `yaml:"audio"`
 	STT     STTConfig     `yaml:"stt"`
-	Hotkey  string        `yaml:"hotkey"`
+	Hotkey  HotkeyConfig  `yaml:"hotkey"`
 	Logging LoggingConfig `yaml:"logging"`
 }
 
@@ -51,14 +64,19 @@ type WorkerConfig struct {
 }
 
 type STTConfig struct {
-	Model     string    `yaml:"model"`
-	ModelPath string    `yaml:"model_path"`
-	VAD       VADConfig `yaml:"vad"`
+	Model            string    `yaml:"model"`
+	ModelPath        string    `yaml:"model_path"`
+	ServerPath       string    `yaml:"server_path"`
+	ServerPort       int       `yaml:"server_port"`
+	StartupTimeoutMS int       `yaml:"startup_timeout_ms"`
+	VAD              VADConfig `yaml:"vad"`
 }
 
 type VADConfig struct {
-	SilenceMS   int `yaml:"silence_ms"`
-	MinSpeechMS int `yaml:"min_speech_ms"`
+	SilenceMS      int `yaml:"silence_ms"`
+	MinSpeechMS    int `yaml:"min_speech_ms"`
+	HangoverMS     int `yaml:"hangover_ms"`
+	Aggressiveness int `yaml:"aggressiveness"`
 }
 
 type LoggingConfig struct {
@@ -106,15 +124,22 @@ var DefaultConfig = Config{
 			OpusModel:    "claude-opus-4-6",
 			Auth:         "subscription",
 		},
+		Audio: AudioConfig{
+			InputDevice:  "",
+			OutputDevice: "",
+		},
 		STT: STTConfig{
-			Model:     "whisper-large-v3-turbo",
-			ModelPath: "./models/whisper/ggml-large-v3-turbo.bin",
+			Model:            "whisper-large-v3-turbo",
+			ModelPath:        "./models/whisper/ggml-large-v3-turbo.bin",
+			StartupTimeoutMS: 10000,
 			VAD: VADConfig{
-				SilenceMS:   800,
-				MinSpeechMS: 300,
+				SilenceMS:      800,
+				MinSpeechMS:    300,
+				HangoverMS:     500,
+				Aggressiveness: 2,
 			},
 		},
-		Hotkey: "option+space",
+		Hotkey: HotkeyConfig{Mode: "tty", Key: "enter"},
 		Logging: LoggingConfig{
 			TranscriptDir: "./.freeman/transcripts",
 		},
