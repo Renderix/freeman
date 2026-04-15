@@ -42,7 +42,7 @@ func (m *Machine) handleIdle(e Event) []Effect {
 		m.transcript = []string{}
 		m.objective = nil
 		m.pendingAskUserID = ""
-		return []Effect{SpeakEffect{Text: "hi. what are we building?"}}
+		return []Effect{ResetPMEffect{}, SpeakEffect{Text: "hi. what are we building?"}}
 	}
 	return []Effect{}
 }
@@ -52,8 +52,9 @@ func (m *Machine) handleIntake(e Event) []Effect {
 	case UserUtterance:
 		m.transcript = append(m.transcript, ev.Text)
 		return []Effect{CallPMIntakeEffect{Input: IntakeInput{
-			Transcript: append([]string{}, m.transcript...),
-			Latest:     ev.Text,
+			Transcript:      append([]string{}, m.transcript...),
+			Latest:          ev.Text,
+			InterruptedText: ev.InterruptedText,
 		}}}
 	case PMIntakeResult:
 		if ev.NeedsMore {
@@ -88,8 +89,9 @@ func (m *Machine) handleAwaitingConfirm(e Event) []Effect {
 	// Not affirmative — treat as continued intake.
 	m.state = StateIntake
 	return []Effect{CallPMIntakeEffect{Input: IntakeInput{
-		Transcript: append([]string{}, m.transcript...),
-		Latest:     ev.Text,
+		Transcript:      append([]string{}, m.transcript...),
+		Latest:          ev.Text,
+		InterruptedText: ev.InterruptedText,
 	}}}
 }
 

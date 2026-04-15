@@ -8,11 +8,44 @@ func TestMachine_IdleToIntake(t *testing.T) {
 	if m.State() != StateIntake {
 		t.Fatalf("state = %s, want intake", m.State())
 	}
-	if len(effects) != 1 {
-		t.Fatalf("effects len = %d, want 1", len(effects))
+	if len(effects) != 2 {
+		t.Fatalf("effects len = %d, want 2", len(effects))
 	}
-	if _, ok := effects[0].(SpeakEffect); !ok {
-		t.Errorf("effects[0] = %T, want SpeakEffect", effects[0])
+	if _, ok := effects[0].(ResetPMEffect); !ok {
+		t.Errorf("effects[0] = %T, want ResetPMEffect", effects[0])
+	}
+	if _, ok := effects[1].(SpeakEffect); !ok {
+		t.Errorf("effects[1] = %T, want SpeakEffect", effects[1])
+	}
+}
+
+func TestMachine_IdleHotkeyEmitsResetPM(t *testing.T) {
+	m := NewMachine()
+	effects := m.Handle(HotkeyPress{})
+	if len(effects) < 2 {
+		t.Fatalf("want ≥2 effects, got %d", len(effects))
+	}
+	if _, ok := effects[0].(ResetPMEffect); !ok {
+		t.Errorf("effects[0] = %T, want ResetPMEffect", effects[0])
+	}
+	if _, ok := effects[1].(SpeakEffect); !ok {
+		t.Errorf("effects[1] = %T, want SpeakEffect", effects[1])
+	}
+}
+
+func TestMachine_IntakePassesInterruptedText(t *testing.T) {
+	m := NewMachine()
+	m.Handle(HotkeyPress{}) // enter Intake
+	effects := m.Handle(UserUtterance{Text: "build a feature flag", InterruptedText: "what should i call it?"})
+	if len(effects) != 1 {
+		t.Fatalf("want 1 effect, got %d", len(effects))
+	}
+	eff, ok := effects[0].(CallPMIntakeEffect)
+	if !ok {
+		t.Fatalf("effect = %T, want CallPMIntakeEffect", effects[0])
+	}
+	if eff.Input.InterruptedText != "what should i call it?" {
+		t.Errorf("InterruptedText = %q, want %q", eff.Input.InterruptedText, "what should i call it?")
 	}
 }
 
