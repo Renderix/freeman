@@ -91,6 +91,43 @@ func (e *TTSEngine) Generate(text, voice string, speed float64) ([]byte, error) 
 	return Float32ToWav(audio.Samples, audio.SampleRate), nil
 }
 
+// GeneratePCM is the hot path for local playback: runs Kokoro and returns raw
+// int16 samples plus the engine's native sample rate, skipping the WAV header.
+// Plan 2's playback.Speaker drives these samples straight into malgo.
+//
+// Semantics match Generate: the voice argument is reserved for future use but
+// currently ignored — both methods use speaker ID 0.
+func (e *TTSEngine) GeneratePCM(text, voice string, speed float64) ([]int16, int, error) {
+	if e == nil || e.tts == nil {
+		return nil, 0, fmt.Errorf("engine not initialized")
+	}
+	speakerID := 0
+	_ = voice // parity with Generate; wire voice→speakerID mapping when Generate grows one
+
+	audio := e.tts.Generate(text, speakerID, float32(speed))
+	if audio == nil || audio.Samples == nil || len(audio.Samples) == 0 {
+		return nil, 0, fmt.Errorf("empty audio for %q", text)
+	}
+	pcm := float32ToPCM(audio.Samples)
+	return pcm, audio.SampleRate, nil
+}
+
+// float32ToPCM converts normalized float32 audio samples to int16 PCM.
+// Values outside [-1.0, 1.0] are clamped.
+func float32ToPCM(samples []float32) []int16 {
+	pcm := make([]int16, len(samples))
+	for i, f := range samples {
+		v := f * 32767.0
+		if v > 32767 {
+			v = 32767
+		} else if v < -32768 {
+			v = -32768
+		}
+		pcm[i] = int16(v)
+	}
+	return pcm
+}
+
 // Float32ToWav converts float32 samples to 16-bit PCM WAV bytes.
 func Float32ToWav(samples []float32, sampleRate int) []byte {
 	buf := new(bytes.Buffer)
