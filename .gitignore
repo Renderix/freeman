@@ -2,11 +2,12 @@
 freeman-go
 freeman
 
-# Models (download via scripts/setup_go_models.sh)
+# Models (download via scripts/setup_go_models.sh and setup_whisper_model.sh)
 models/*.onnx
 models/*.bin
 models/*.tar.bz2
 models/espeak-ng-data/
+models/whisper/
 
 # Go build artifacts
 *.exe
