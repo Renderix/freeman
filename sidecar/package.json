@@ -6,7 +6,8 @@
   "scripts": {
     "stub": "bun run stub.ts",
     "sidecar": "bun run sidecar.ts",
-    "pm-sidecar": "bun run pm-sidecar.ts"
+    "pm-sidecar": "bun run pm-sidecar.ts",
+    "conv-sidecar": "bun run conv-sidecar.ts"
   },
   "dependencies": {
     "@mariozechner/pi-coding-agent": "latest"
