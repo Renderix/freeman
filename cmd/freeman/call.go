@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -16,31 +15,21 @@ import (
 	"github.com/Renderix/freeman/internal/audio/playback"
 	"github.com/Renderix/freeman/internal/audio/stt"
 	"github.com/Renderix/freeman/internal/audio/vad"
-	"github.com/Renderix/freeman/internal/call"
-	"github.com/Renderix/freeman/internal/call/fakes"
 	"github.com/Renderix/freeman/internal/config"
+	"github.com/Renderix/freeman/internal/conv"
 	"github.com/Renderix/freeman/internal/engine"
-	"github.com/Renderix/freeman/internal/pm"
-	"github.com/Renderix/freeman/internal/sidecar"
 	"github.com/spf13/cobra"
 )
-
-var fakeAudio bool
-
-func init() {
-	callCmd.Flags().BoolVar(&fakeAudio, "fake-audio", false, "use Plan 1 stdin/stdout audio fakes (headless testing)")
-}
 
 var callCmd = &cobra.Command{
 	Use:   "call",
 	Short: "Start a Freeman voice call",
-	Long: `Start a Freeman voice call. By default uses real audio hardware.
+	Long: `Start a Freeman voice call. Uses real audio hardware (mic + speakers),
+Whisper for STT, Kokoro for TTS, and a long-lived pi-coding-agent
+chat session that can spawn background coding tasks on demand.
 
-Use --fake-audio for Plan 1 harness: reads user utterances as lines from stdin,
-writes spoken output as '[tts] ...' lines to stdout, uses a scripted
-PM, and spawns the Bun TypeScript stub sidecar.
-
-Send SIGUSR1 to the process to simulate a hotkey press (fake-audio mode).`,
+Requires pi-coding-agent subscription auth: run scripts/pi_login.sh
+once before first use.`,
 	RunE: runCall,
 }
 
@@ -50,61 +39,6 @@ func runCall(cmd *cobra.Command, args []string) error {
 	ctx, cancel := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	if fakeAudio {
-		return runCallWithFakes(ctx, conf)
-	}
-	return runCallWithRealAudio(ctx, conf)
-}
-
-func runCallWithFakes(ctx context.Context, conf config.Config) error {
-	repoRoot, err := findRepoRoot()
-	if err != nil {
-		return err
-	}
-	stubPath := filepath.Join(repoRoot, "sidecar", "stub.ts")
-	sc, err := sidecar.Spawn(ctx, "bun", "run", stubPath)
-	if err != nil {
-		return fmt.Errorf("spawn sidecar: %w", err)
-	}
-	defer sc.Close()
-
-	tr := fakes.NewLineReaderTranscriber(os.Stdin)
-	defer tr.Stop()
-
-	speaker := fakes.NewStdoutSpeaker(os.Stdout)
-	pm := fakes.NewScriptedPM()
-
-	hkChan := make(chan struct{}, 4)
-	sigChan := make(chan os.Signal, 4)
-	signal.Notify(sigChan, syscall.SIGUSR1)
-	defer func() {
-		signal.Stop(sigChan)
-		close(sigChan)
-	}()
-	go func() {
-		for range sigChan {
-			select {
-			case hkChan <- struct{}{}:
-			default:
-			}
-		}
-	}()
-	hk := &channelHotkey{ch: hkChan}
-
-	session := call.NewSession(call.SessionDeps{
-		Transcriber: tr,
-		Speaker:     speaker,
-		PM:          pm,
-		Hotkey:      hk,
-		Sidecar:     sc,
-	})
-
-	fmt.Fprintln(os.Stderr, "freeman: ready. SIGUSR1 to start a call, type utterances as lines.")
-	fmt.Fprintf(os.Stderr, "freeman: pid=%d\n", os.Getpid())
-	return session.Run(ctx)
-}
-
-func runCallWithRealAudio(ctx context.Context, conf config.Config) error {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	// 1. Shared audio context (malgo).
@@ -172,25 +106,26 @@ func runCallWithRealAudio(ctx context.Context, conf config.Config) error {
 	}
 	uttCh := v.Run(ctx, cap.Frames())
 
-	// 6. STT Transcriber (also implements audio.Muter).
+	// 6. STT Transcriber.
 	client := stt.NewClient(mgr.BaseURL(), 10*time.Second)
 	tr := stt.NewTranscriber(client, uttCh, 16000)
 	tr.Run(ctx)
 	defer tr.Stop()
 
-	// 7. Playback Speaker, pointed at the Transcriber as its Muter.
+	// 7. Speaker, muting VAD + Transcriber together.
+	muter := &audio.MultiMuter{Muters: []audio.Muter{v, tr}}
 	sp, err := playback.Open(actx, playback.Config{
 		DeviceID: conf.Freeman.Audio.OutputDevice,
 		ChunkMs:  50,
 		Voice:    conf.TTS.DefaultVoice,
 		Speed:    conf.TTS.DefaultSpeed,
-	}, eng, tr)
+	}, eng, muter)
 	if err != nil {
 		return fmt.Errorf("playback open: %w", err)
 	}
 	defer sp.Close()
 
-	// 8. Hotkey (TTY or stdin-line).
+	// 8. Hotkey.
 	hk, err := hotkey.Open(hotkey.Config{
 		Mode: conf.Freeman.Hotkey.Mode,
 		Key:  conf.Freeman.Hotkey.Key,
@@ -200,50 +135,33 @@ func runCallWithRealAudio(ctx context.Context, conf config.Config) error {
 	}
 	defer hk.Stop()
 
-	// 9. Real sidecar (pi-coding-agent).
+	// 9. TaskManager (no task running yet).
 	repoRoot, err := findRepoRoot()
 	if err != nil {
 		return err
 	}
-	sidecarPath := filepath.Join(repoRoot, "sidecar", "sidecar.ts")
-	sc, err := sidecar.Spawn(ctx, "bun", "run", sidecarPath)
-	if err != nil {
-		return fmt.Errorf("spawn sidecar: %w", err)
-	}
-	defer sc.Close()
+	taskMgr := conv.NewTaskManager(repoRoot)
+	defer taskMgr.Close()
 
-	fmt.Fprintln(os.Stderr, "freeman: ready")
-
-	// 10. PM sidecar (pi-coding-agent subscription auth).
-	pmSidecarPath := filepath.Join(repoRoot, "sidecar", "pm-sidecar.ts")
-	piPM, err := pm.New(ctx, pm.Config{
-		Command:             "bun",
-		Args:                []string{"run", pmSidecarPath},
-		Model:               conf.Freeman.PM.Model,
-		ConfidenceThreshold: conf.Freeman.PM.ConfidenceThreshold,
-	})
-	if err != nil {
-		return fmt.Errorf("pm sidecar: %w", err)
-	}
-	defer piPM.Close()
-
-	// 11. Session with speech onsets for barge-in.
-	session := call.NewSession(call.SessionDeps{
+	// 10. Conv session.
+	convSession, err := conv.NewSession(ctx, conv.Deps{
 		Transcriber:  tr,
 		Speaker:      sp,
-		PM:           piPM,
 		Hotkey:       hk,
-		Sidecar:      sc,
 		SpeechOnsets: v.SpeechOnsets(),
+		TaskManager:  taskMgr,
+		RepoRoot:     repoRoot,
+		Model:        conf.Freeman.PM.Model,
+		Logger:       logger,
 	})
-	return session.Run(ctx)
+	if err != nil {
+		return fmt.Errorf("conv session: %w", err)
+	}
+	defer convSession.Close()
+
+	fmt.Fprintln(os.Stderr, "freeman: ready")
+	return convSession.Run(ctx)
 }
-
-// channelHotkey adapts a plain channel to the Hotkey interface.
-type channelHotkey struct{ ch chan struct{} }
-
-func (c *channelHotkey) Events() <-chan struct{} { return c.ch }
-func (c *channelHotkey) Stop()                   {}
 
 // findRepoRoot walks up from the current working directory until it finds go.mod.
 func findRepoRoot() (string, error) {
