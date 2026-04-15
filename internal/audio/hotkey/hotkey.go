@@ -84,8 +84,12 @@ func (h *Hotkey) startTTY(key string) error {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		<-sigCh
-		h.restoreFn()
+		select {
+		case <-sigCh:
+			h.Stop()
+		case <-h.stopCh:
+			signal.Stop(sigCh)
+		}
 	}()
 
 	go func() {
@@ -110,7 +114,7 @@ func (h *Hotkey) startTTY(key string) error {
 				}
 			}
 			if buf[0] == 0x03 { // Ctrl-C in raw mode
-				h.restoreFn()
+				h.Stop()
 				_ = syscall.Kill(syscall.Getpid(), syscall.SIGINT)
 				return
 			}
