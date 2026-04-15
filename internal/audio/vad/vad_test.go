@@ -143,6 +143,55 @@ func TestVAD_TwoUtterances(t *testing.T) {
 	}
 }
 
+// Script: 5 silence frames then 20 speech frames.
+// SpeechOnsets() must fire once, before the utterance channel fires.
+func TestVAD_SpeechOnset(t *testing.T) {
+	script := append(boolN(5, false), boolN(20, true)...)
+	script = append(script, boolN(40, false)...) // 800 ms silence to flush utterance
+	fd := &fakeDetector{script: script}
+	v := NewWithDetector(Config{
+		SilenceMs:   800,
+		MinSpeechMs: 300,
+		SampleRate:  16000,
+		FrameMs:     20,
+	}, fd)
+
+	in := make(chan []int16, len(script))
+	for range script {
+		in <- frame()
+	}
+	close(in)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	out := v.Run(ctx, in)
+
+	// Onset must arrive before or simultaneously with the first utterance.
+	onsets := v.SpeechOnsets()
+
+	select {
+	case <-onsets:
+		// good: got an onset
+	case <-out:
+		t.Fatal("utterance arrived before onset")
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for onset")
+	}
+
+	// Utterance should follow.
+	select {
+	case u, ok := <-out:
+		if !ok {
+			t.Fatal("utterance channel closed without emitting")
+		}
+		if u.DurationMs != 400 {
+			t.Errorf("duration = %d, want 400", u.DurationMs)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for utterance after onset")
+	}
+}
+
 func boolN(n int, v bool) []bool {
 	out := make([]bool, n)
 	for i := range out {

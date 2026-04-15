@@ -27,8 +27,9 @@ func (c Config) framesFor(ms int) int {
 
 // VAD owns the detector and the endpointing SM.
 type VAD struct {
-	cfg Config
-	det Detector
+	cfg    Config
+	det    Detector
+	onsets chan struct{}
 }
 
 // New returns a VAD backed by the WebRTC detector.
@@ -42,8 +43,13 @@ func New(cfg Config) (*VAD, error) {
 
 // NewWithDetector lets tests inject a fake classifier.
 func NewWithDetector(cfg Config, d Detector) *VAD {
-	return &VAD{cfg: cfg, det: d}
+	return &VAD{cfg: cfg, det: d, onsets: make(chan struct{}, 1)}
 }
+
+// SpeechOnsets returns a channel that receives a value on every
+// stateSilent → stateSpeech transition. The channel has capacity 1;
+// extra onsets are dropped rather than blocking the VAD goroutine.
+func (v *VAD) SpeechOnsets() <-chan struct{} { return v.onsets }
 
 // Run consumes 20 ms frames from `in` and emits completed utterances to the
 // returned channel. The channel closes when `in` closes or ctx is canceled.
@@ -90,6 +96,11 @@ func (v *VAD) Run(ctx context.Context, in <-chan []int16) <-chan Utterance {
 				case stateSilent:
 					if isSpeech {
 						state = stateSpeech
+						// Notify listeners of speech onset; non-blocking to never stall the goroutine.
+						select {
+						case v.onsets <- struct{}{}:
+						default:
+						}
 						buf = append(buf, frame...)
 						bufFrames++
 						silenceFrames = 0
