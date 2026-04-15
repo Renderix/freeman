@@ -4,6 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "stub": "bun run stub.ts"
+    "stub": "bun run stub.ts",
+    "sidecar": "bun run sidecar.ts"
+  },
+  "dependencies": {
+    "@mariozechner/pi-coding-agent": "latest"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.12"
   }
 }
