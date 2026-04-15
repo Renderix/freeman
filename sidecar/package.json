@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "stub": "bun run stub.ts",
-    "sidecar": "bun run sidecar.ts"
+    "sidecar": "bun run sidecar.ts",
+    "pm-sidecar": "bun run pm-sidecar.ts"
   },
   "dependencies": {
     "@mariozechner/pi-coding-agent": "latest"

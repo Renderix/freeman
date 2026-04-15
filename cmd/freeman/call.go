@@ -214,19 +214,24 @@ func runCallWithRealAudio(ctx context.Context, conf config.Config) error {
 
 	fmt.Fprintln(os.Stderr, "freeman: ready")
 
-	// 10. Haiku PM.
-	apiKey := os.Getenv(conf.Freeman.PM.APIKeyEnv)
-	haiku := pm.New(pm.Config{
-		APIKey:              apiKey,
+	// 10. PM sidecar (pi-coding-agent subscription auth).
+	pmSidecarPath := filepath.Join(repoRoot, "sidecar", "pm-sidecar.ts")
+	piPM, err := pm.New(ctx, pm.Config{
+		Command:             "bun",
+		Args:                []string{"run", pmSidecarPath},
 		Model:               conf.Freeman.PM.Model,
 		ConfidenceThreshold: conf.Freeman.PM.ConfidenceThreshold,
 	})
+	if err != nil {
+		return fmt.Errorf("pm sidecar: %w", err)
+	}
+	defer piPM.Close()
 
 	// 11. Session with speech onsets for barge-in.
 	session := call.NewSession(call.SessionDeps{
 		Transcriber:  tr,
 		Speaker:      sp,
-		PM:           haiku,
+		PM:           piPM,
 		Hotkey:       hk,
 		Sidecar:      sc,
 		SpeechOnsets: v.SpeechOnsets(),
