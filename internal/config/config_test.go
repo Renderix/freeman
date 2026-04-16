@@ -17,11 +17,8 @@ func TestLoadConfig_Freeman_Defaults(t *testing.T) {
 	if conf.Freeman.Worker.DefaultModel != "claude-sonnet-4-6" {
 		t.Errorf("default worker model = %q", conf.Freeman.Worker.DefaultModel)
 	}
-	if conf.Freeman.Hotkey.Mode != "tty" {
-		t.Errorf("default hotkey mode = %q, want tty", conf.Freeman.Hotkey.Mode)
-	}
-	if conf.Freeman.Hotkey.Key != "enter" {
-		t.Errorf("default hotkey key = %q, want enter", conf.Freeman.Hotkey.Key)
+	if conf.Persona.Name != "" {
+		t.Errorf("default persona name = %q, want empty", conf.Persona.Name)
 	}
 }
 
@@ -44,9 +41,6 @@ freeman:
     vad:
       silence_ms: 500
       min_speech_ms: 200
-  hotkey:
-    mode: global
-    key: ctrl+space
   logging:
     transcript_dir: ./t
 `
@@ -62,12 +56,6 @@ freeman:
 	}
 	if conf.Freeman.STT.VAD.SilenceMS != 500 {
 		t.Errorf("vad.silence = %d", conf.Freeman.STT.VAD.SilenceMS)
-	}
-	if conf.Freeman.Hotkey.Mode != "global" {
-		t.Errorf("hotkey.mode = %q", conf.Freeman.Hotkey.Mode)
-	}
-	if conf.Freeman.Hotkey.Key != "ctrl+space" {
-		t.Errorf("hotkey.key = %q", conf.Freeman.Hotkey.Key)
 	}
 }
 
@@ -104,12 +92,6 @@ func TestLoadConfig_Freeman_Plan2Defaults(t *testing.T) {
 	if conf.Freeman.STT.VAD.Aggressiveness != 2 {
 		t.Errorf("default VAD.Aggressiveness = %d, want 2", conf.Freeman.STT.VAD.Aggressiveness)
 	}
-	if conf.Freeman.Hotkey.Mode != "tty" {
-		t.Errorf("default Hotkey.Mode = %q, want tty", conf.Freeman.Hotkey.Mode)
-	}
-	if conf.Freeman.Hotkey.Key != "enter" {
-		t.Errorf("default Hotkey.Key = %q, want enter", conf.Freeman.Hotkey.Key)
-	}
 }
 
 func TestLoadConfig_Freeman_Plan2YAML(t *testing.T) {
@@ -130,9 +112,6 @@ freeman:
       min_speech_ms: 250
       hangover_ms: 300
       aggressiveness: 3
-  hotkey:
-    mode: stdin-line
-    key: space
 `)
 	if err := os.WriteFile(path, body, 0o644); err != nil {
 		t.Fatal(err)
@@ -146,12 +125,6 @@ freeman:
 	}
 	if conf.Freeman.STT.VAD.Aggressiveness != 3 {
 		t.Errorf("VAD.Aggressiveness = %d", conf.Freeman.STT.VAD.Aggressiveness)
-	}
-	if conf.Freeman.Hotkey.Mode != "stdin-line" {
-		t.Errorf("Hotkey.Mode = %q", conf.Freeman.Hotkey.Mode)
-	}
-	if conf.Freeman.Hotkey.Key != "space" {
-		t.Errorf("Hotkey.Key = %q", conf.Freeman.Hotkey.Key)
 	}
 	if conf.Freeman.Audio.OutputDevice != "External Speakers" {
 		t.Errorf("Audio.OutputDevice = %q", conf.Freeman.Audio.OutputDevice)
