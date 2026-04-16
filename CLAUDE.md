@@ -22,12 +22,13 @@ cd sidecar && bun install        # TypeScript sidecar deps
 # Model setup (required before first run)
 ./scripts/setup_go_models.sh     # Kokoro ONNX models → ./models/
 ./scripts/setup_whisper_model.sh # Whisper model → ./models/whisper/
-./scripts/setup_wakeword_models.sh  # Porcupine .ppn keyword files → ./models/wakeword/
+./scripts/setup_wakeword_models.sh  # OpenWakeWord shared ONNX models → ./models/wakeword/
+./scripts/train_wakeword.sh         # Train custom keyword models (one-time, ~30-60 min)
 
 # Run TTS server
 ./freeman start --config config.yaml
 
-# Run voice call (requires PICOVOICE_ACCESS_KEY env var)
+# Run voice call
 ./freeman call --config config.yaml
 
 # Health check
@@ -111,7 +112,7 @@ Key config sections: `server`, `model` (Kokoro paths), `tts` (voice/speed/buffer
 - `github.com/k2-fsa/sherpa-onnx-go` — ONNX TTS engine (Kokoro-82M)
 - `github.com/gen2brain/malgo` — Cross-platform audio I/O (miniaudio)
 - `github.com/maxhawkins/go-webrtcvad` — Voice Activity Detection
-- `github.com/Picovoice/porcupine/binding/go/v3` — Porcupine wake word detection
+- `github.com/yalue/onnxruntime_go` — ONNX Runtime for wake word detection (OpenWakeWord)
 - `github.com/gin-gonic/gin` — HTTP/WebSocket server
 - `github.com/spf13/cobra` — CLI framework
 - `@mariozechner/pi-coding-agent` — TypeScript LLM agent (sidecar dependency)

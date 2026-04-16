@@ -4,38 +4,22 @@ set -euo pipefail
 MODELS_DIR="$(cd "$(dirname "$0")/.." && pwd)/models/wakeword"
 mkdir -p "$MODELS_DIR"
 
-echo "=== Porcupine Wake Word Model Setup ==="
-echo ""
-echo "Freeman requires custom .ppn keyword files from Picovoice Console."
-echo ""
-echo "Steps:"
-echo "  1. Sign up at https://console.picovoice.ai/"
-echo "  2. Create three custom keywords:"
-echo "     - \"Horus\"       (save as horus.ppn)"
-echo "     - \"Mute\"        (save as mute.ppn)"
-echo "     - \"Horus stop\"  (save as horus-stop.ppn)"
-echo "  3. Download each .ppn file for your platform (macOS / Linux)"
-echo "  4. Place them in: $MODELS_DIR/"
-echo ""
-echo "  5. Set your Picovoice access key:"
-echo "     export PICOVOICE_ACCESS_KEY=your-key-here"
-echo ""
+BASE_URL="https://github.com/dscripka/openWakeWord/raw/refs/heads/main/openwakeword/resources/models"
 
-MISSING=0
-for f in horus.ppn mute.ppn horus-stop.ppn; do
-    if [ ! -f "$MODELS_DIR/$f" ]; then
-        echo "  MISSING: $MODELS_DIR/$f"
-        MISSING=1
+echo "=== OpenWakeWord Shared Model Setup ==="
+
+for f in melspectrogram.onnx embedding_model.onnx; do
+    if [ -f "$MODELS_DIR/$f" ]; then
+        echo "  OK: $f (already exists)"
     else
-        echo "  OK: $MODELS_DIR/$f"
+        echo "  Downloading: $f ..."
+        curl -fSL "$BASE_URL/$f" -o "$MODELS_DIR/$f"
+        echo "  OK: $f"
     fi
 done
 
-if [ "$MISSING" -eq 1 ]; then
-    echo ""
-    echo "Some keyword files are missing. See instructions above."
-    exit 1
-fi
-
 echo ""
-echo "All keyword files present. Ready to run: ./freeman call"
+echo "Shared models ready in $MODELS_DIR/"
+echo ""
+echo "Next: train custom keyword models with ./scripts/train_wakeword.sh"
+echo "  or place pre-trained .onnx files (horus.onnx, mute.onnx, horus_stop.onnx) in $MODELS_DIR/"
