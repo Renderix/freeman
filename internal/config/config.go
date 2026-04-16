@@ -77,26 +77,30 @@ type LoggingConfig struct {
 	TranscriptDir string `yaml:"transcript_dir"`
 }
 
-type KeywordPathsConfig struct {
-	Wake string `yaml:"wake"`
-	Mute string `yaml:"mute"`
-	Stop string `yaml:"stop"`
+type WakewordKeywordConfig struct {
+	Model     string  `yaml:"model"`
+	Threshold float32 `yaml:"threshold"`
 }
 
-type SensitivitiesConfig struct {
-	Wake float32 `yaml:"wake"`
-	Mute float32 `yaml:"mute"`
-	Stop float32 `yaml:"stop"`
+type WakewordKeywordsConfig struct {
+	Wake WakewordKeywordConfig `yaml:"wake"`
+	Mute WakewordKeywordConfig `yaml:"mute"`
+	Stop WakewordKeywordConfig `yaml:"stop"`
+}
+
+type WakewordConfig struct {
+	ModelsDir      string                 `yaml:"models_dir"`
+	Melspectrogram string                 `yaml:"melspectrogram"`
+	Embedding      string                 `yaml:"embedding"`
+	Keywords       WakewordKeywordsConfig `yaml:"keywords"`
 }
 
 type PersonaConfig struct {
-	Name          string              `yaml:"name"`
-	Greeting      string              `yaml:"greeting"`
-	Traits        []string            `yaml:"traits"`
-	Rules         []string            `yaml:"rules"`
-	AccessKeyEnv  string              `yaml:"access_key_env"`
-	KeywordPaths  KeywordPathsConfig  `yaml:"keyword_paths"`
-	Sensitivities SensitivitiesConfig `yaml:"sensitivities"`
+	Name     string         `yaml:"name"`
+	Greeting string         `yaml:"greeting"`
+	Traits   []string       `yaml:"traits"`
+	Rules    []string       `yaml:"rules"`
+	Wakeword WakewordConfig `yaml:"wakeword"`
 }
 
 var DefaultConfig = Config{

@@ -51,12 +51,17 @@ persona:
     - "No bullet points"
     - "No code fences"
     - "Keep responses under 3 sentences"
-  access_key_env: PICOVOICE_ACCESS_KEY
-  keyword_paths:
-    wake: "./models/wakeword/horus.ppn"
-    mute: "./models/wakeword/mute.ppn"
-    stop: "./models/wakeword/horus-stop.ppn"
-  sensitivities:
-    wake: 0.5
-    mute: 0.5
-    stop: 0.7
+  wakeword:
+    models_dir: "./models/wakeword"
+    melspectrogram: "melspectrogram.onnx"
+    embedding: "embedding_model.onnx"
+    keywords:
+      wake:
+        model: "horus.onnx"
+        threshold: 0.5
+      mute:
+        model: "mute.onnx"
+        threshold: 0.5
+      stop:
+        model: "horus_stop.onnx"
+        threshold: 0.7
