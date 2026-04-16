@@ -13,7 +13,7 @@ import (
 	"github.com/Renderix/freeman/internal/agent/picoding"
 	"github.com/Renderix/freeman/internal/audio"
 	"github.com/Renderix/freeman/internal/audio/capture"
-	"github.com/Renderix/freeman/internal/audio/hotkey"
+	"github.com/Renderix/freeman/internal/audio/wakeword"
 	"github.com/Renderix/freeman/internal/audio/playback"
 	"github.com/Renderix/freeman/internal/audio/stt"
 	"github.com/Renderix/freeman/internal/audio/vad"
@@ -118,13 +118,18 @@ func runCall(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("vad init: %w", err)
 	}
-	uttCh := v.Run(ctx, cap.Frames())
+	vadFrames := cap.Subscribe()
+	defer cap.Unsubscribe(vadFrames)
+	uttCh := v.Run(ctx, vadFrames)
 
 	// 6. STT Transcriber.
 	client := stt.NewClient(mgr.BaseURL(), 10*time.Second)
 	tr := stt.NewTranscriber(client, uttCh, 16000)
 	tr.Run(ctx)
 	defer tr.Stop()
+
+	v.Mute()
+	tr.Mute()
 
 	// 7. Speaker, muting VAD + Transcriber together.
 	muter := &audio.MultiMuter{Muters: []audio.Muter{v, tr}}
@@ -139,15 +144,34 @@ func runCall(cmd *cobra.Command, args []string) error {
 	}
 	defer sp.Close()
 
-	// 8. Hotkey.
-	hk, err := hotkey.Open(hotkey.Config{
-		Mode: conf.Freeman.Hotkey.Mode,
-		Key:  conf.Freeman.Hotkey.Key,
+	// 8. Wakeword detector.
+	accessKey := os.Getenv(conf.Persona.AccessKeyEnv)
+	if accessKey == "" {
+		return fmt.Errorf("environment variable %s not set (Picovoice access key)", conf.Persona.AccessKeyEnv)
+	}
+	wkFrames := cap.Subscribe()
+	defer cap.Unsubscribe(wkFrames)
+	wk, err := wakeword.NewDetector(wakeword.Config{
+		AccessKey: accessKey,
+		KeywordPaths: []string{
+			conf.Persona.KeywordPaths.Wake,
+			conf.Persona.KeywordPaths.Mute,
+			conf.Persona.KeywordPaths.Stop,
+		},
+		Sensitivities: []float32{
+			conf.Persona.Sensitivities.Wake,
+			conf.Persona.Sensitivities.Mute,
+			conf.Persona.Sensitivities.Stop,
+		},
+		Logger: logger,
 	})
 	if err != nil {
-		return fmt.Errorf("hotkey open: %w", err)
+		return fmt.Errorf("wakeword detector: %w", err)
 	}
-	defer hk.Stop()
+	defer wk.Stop()
+	wk.Run(wkFrames)
+
+	fmt.Fprintf(os.Stderr, "%s listening... say %q to begin\n", conf.Persona.Name, conf.Persona.Name)
 
 	// 9. Agent backend.
 	chatAgent := picoding.NewChatAgent(repoRoot)
@@ -159,23 +183,23 @@ func runCall(cmd *cobra.Command, args []string) error {
 
 	// 11. Conv session.
 	convSession, err := conv.NewSession(ctx, conv.Deps{
-		Transcriber:   tr,
-		Speaker:       sp,
-		Hotkey:        hk,
-		SpeechOnsets:  v.SpeechOnsets(),
-		TaskManager:   taskMgr,
-		ChatAgent:     chatAgent,
-		ModelResolver: taskFactory.ResolveModel,
-		RepoRoot:      repoRoot,
-		Model:         conf.Freeman.PM.Model,
-		Logger:        logger,
+		Transcriber:    tr,
+		Speaker:        sp,
+		WakewordEvents: wk.Events(),
+		SpeechOnsets:   v.SpeechOnsets(),
+		TaskManager:    taskMgr,
+		ChatAgent:      chatAgent,
+		ModelResolver:  taskFactory.ResolveModel,
+		Persona:        conf.Persona,
+		RepoRoot:       repoRoot,
+		Model:          conf.Freeman.PM.Model,
+		Logger:         logger,
 	})
 	if err != nil {
 		return fmt.Errorf("conv session: %w", err)
 	}
 	defer convSession.Close()
 
-	fmt.Fprintln(os.Stderr, "freeman: ready")
 	return convSession.Run(ctx)
 }
 
