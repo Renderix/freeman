@@ -37,8 +37,26 @@ freeman:
       min_speech_ms: 300
       hangover_ms: 500
       aggressiveness: 2
-  hotkey:
-    mode: tty
-    key: enter
   logging:
     transcript_dir: ./.freeman/transcripts
+
+persona:
+  name: "Horus"
+  greeting: "I'm here"
+  traits:
+    - "concise"
+    - "technical"
+  rules:
+    - "No markdown in responses"
+    - "No bullet points"
+    - "No code fences"
+    - "Keep responses under 3 sentences"
+  access_key_env: PICOVOICE_ACCESS_KEY
+  keyword_paths:
+    wake: "./models/wakeword/horus.ppn"
+    mute: "./models/wakeword/mute.ppn"
+    stop: "./models/wakeword/horus-stop.ppn"
+  sensitivities:
+    wake: 0.5
+    mute: 0.5
+    stop: 0.7

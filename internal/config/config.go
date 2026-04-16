@@ -28,6 +28,7 @@ type Config struct {
 	} `yaml:"tts"`
 
 	Freeman FreemanConfig `yaml:"freeman"`
+	Persona PersonaConfig `yaml:"persona"`
 }
 
 // AudioConfig selects capture and playback devices.
@@ -36,18 +37,11 @@ type AudioConfig struct {
 	OutputDevice string `yaml:"output_device"`
 }
 
-// HotkeyConfig selects the Plan 2 hotkey implementation.
-type HotkeyConfig struct {
-	Mode string `yaml:"mode"` // "tty" | "stdin-line"
-	Key  string `yaml:"key"`  // "enter" | "space"
-}
-
 type FreemanConfig struct {
 	PM      PMConfig      `yaml:"pm"`
 	Worker  WorkerConfig  `yaml:"worker"`
 	Audio   AudioConfig   `yaml:"audio"`
 	STT     STTConfig     `yaml:"stt"`
-	Hotkey  HotkeyConfig  `yaml:"hotkey"`
 	Logging LoggingConfig `yaml:"logging"`
 }
 
@@ -81,6 +75,28 @@ type VADConfig struct {
 
 type LoggingConfig struct {
 	TranscriptDir string `yaml:"transcript_dir"`
+}
+
+type KeywordPathsConfig struct {
+	Wake string `yaml:"wake"`
+	Mute string `yaml:"mute"`
+	Stop string `yaml:"stop"`
+}
+
+type SensitivitiesConfig struct {
+	Wake float32 `yaml:"wake"`
+	Mute float32 `yaml:"mute"`
+	Stop float32 `yaml:"stop"`
+}
+
+type PersonaConfig struct {
+	Name          string              `yaml:"name"`
+	Greeting      string              `yaml:"greeting"`
+	Traits        []string            `yaml:"traits"`
+	Rules         []string            `yaml:"rules"`
+	AccessKeyEnv  string              `yaml:"access_key_env"`
+	KeywordPaths  KeywordPathsConfig  `yaml:"keyword_paths"`
+	Sensitivities SensitivitiesConfig `yaml:"sensitivities"`
 }
 
 var DefaultConfig = Config{
@@ -139,7 +155,6 @@ var DefaultConfig = Config{
 				Aggressiveness: 2,
 			},
 		},
-		Hotkey: HotkeyConfig{Mode: "tty", Key: "enter"},
 		Logging: LoggingConfig{
 			TranscriptDir: "./.freeman/transcripts",
 		},
