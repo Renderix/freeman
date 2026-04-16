@@ -4,7 +4,7 @@ set -euo pipefail
 MODELS_DIR="$(cd "$(dirname "$0")/.." && pwd)/models/wakeword"
 mkdir -p "$MODELS_DIR"
 
-BASE_URL="https://github.com/dscripka/openWakeWord/raw/refs/heads/main/openwakeword/resources/models"
+BASE_URL="https://github.com/dscripka/openWakeWord/releases/download/v0.5.1"
 
 echo "=== OpenWakeWord Shared Model Setup ==="
 
