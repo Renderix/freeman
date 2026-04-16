@@ -3,47 +3,71 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 MODELS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)/models/wakeword"
-VENV_DIR="$SCRIPT_DIR/.wakeword-venv"
+TRAINER_DIR="$SCRIPT_DIR/.openwakeword-trainer"
 
 echo "=== OpenWakeWord Keyword Training ==="
 echo ""
-echo "This will train custom wake word models for: Horus, Mute, Horus stop"
+echo "This trains custom wake word models using openwakeword-trainer."
 echo "Training takes ~30-60 minutes per keyword on CPU."
+echo "Requires: Python 3.10+, pip, ~4GB disk space"
 echo ""
 
-if [ ! -d "$VENV_DIR" ]; then
-    echo "Creating Python virtual environment..."
-    python3 -m venv "$VENV_DIR"
+if [ ! -d "$TRAINER_DIR" ]; then
+    echo "Cloning openwakeword-trainer..."
+    git clone --depth 1 https://github.com/lgpearson1771/openwakeword-trainer.git "$TRAINER_DIR"
 fi
 
-source "$VENV_DIR/bin/activate"
-pip install -q openwakeword
+cd "$TRAINER_DIR"
+
+if [ ! -d "venv" ]; then
+    echo "Creating virtual environment and installing dependencies..."
+    python3 -m venv venv
+    source venv/bin/activate
+    pip install -q -r requirements.txt
+else
+    source venv/bin/activate
+fi
 
 echo ""
-echo "Training keywords..."
+echo "Training keywords... (this takes a while)"
+echo ""
 
-python3 -c "
-import openwakeword
-from openwakeword.train import train_custom_model
-import os
+for phrase_pair in "horus:horus" "mute:mute" "horus_stop:horus stop"; do
+    filename="${phrase_pair%%:*}"
+    phrase="${phrase_pair#*:}"
+    outfile="$MODELS_DIR/${filename}.onnx"
 
-models_dir = '$MODELS_DIR'
-keywords = [
-    ('horus', 'horus'),
-    ('mute', 'mute'),
-    ('horus_stop', 'horus stop'),
-]
-
-for filename, phrase in keywords:
-    out_path = os.path.join(models_dir, filename + '.onnx')
-    if os.path.exists(out_path):
-        print(f'  SKIP: {filename}.onnx (already exists)')
+    if [ -f "$outfile" ]; then
+        echo "  SKIP: ${filename}.onnx (already exists)"
         continue
-    print(f'  Training: \"{phrase}\" -> {filename}.onnx ...')
-    train_custom_model(phrase, output_path=out_path)
-    print(f'  OK: {filename}.onnx')
-"
+    fi
+
+    echo "  Training: \"$phrase\" -> ${filename}.onnx ..."
+    python3 train.py --phrase "$phrase" --output "$outfile" 2>&1 | tail -3
+    echo "  OK: ${filename}.onnx"
+done
 
 echo ""
 echo "Training complete. Models in $MODELS_DIR/"
+
+MISSING=0
+for f in horus.onnx mute.onnx horus_stop.onnx; do
+    if [ ! -f "$MODELS_DIR/$f" ]; then
+        echo "  MISSING: $f"
+        MISSING=1
+    else
+        echo "  OK: $f"
+    fi
+done
+
+if [ "$MISSING" -eq 1 ]; then
+    echo ""
+    echo "Some models are missing. Check training output above."
+    echo ""
+    echo "Alternative: use Google Colab notebook for training:"
+    echo "  https://github.com/dscripka/openWakeWord/blob/main/notebooks/automatic_model_training.ipynb"
+    exit 1
+fi
+
+echo ""
 echo "Ready to run: ./freeman call"
