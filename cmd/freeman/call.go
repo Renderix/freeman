@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -9,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Renderix/freeman/internal/agent/picoding"
 	"github.com/Renderix/freeman/internal/audio"
 	"github.com/Renderix/freeman/internal/audio/capture"
 	"github.com/Renderix/freeman/internal/audio/hotkey"
@@ -25,8 +27,8 @@ var callCmd = &cobra.Command{
 	Use:   "call",
 	Short: "Start a Freeman voice call",
 	Long: `Start a Freeman voice call. Uses real audio hardware (mic + speakers),
-Whisper for STT, Kokoro for TTS, and a long-lived pi-coding-agent
-chat session that can spawn background coding tasks on demand.
+Whisper for STT, Kokoro for TTS, and a long-lived chat agent session
+that can spawn background coding tasks on demand.
 
 Requires pi-coding-agent subscription auth: run scripts/pi_login.sh
 once before first use.`,
@@ -34,12 +36,23 @@ once before first use.`,
 }
 
 func runCall(cmd *cobra.Command, args []string) error {
-	conf := config.LoadConfig(configFile)
+	repoRoot, err := findRepoRoot()
+	if err != nil {
+		return err
+	}
+	resolve := func(p string) string {
+		if filepath.IsAbs(p) {
+			return p
+		}
+		return filepath.Join(repoRoot, p)
+	}
+
+	conf := config.LoadConfig(resolve(configFile))
 
 	ctx, cancel := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logger := slog.New(slog.NewTextHandler(newlineWriter{os.Stderr}, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	// 1. Shared audio context (malgo).
 	actx, err := audio.New(logger)
@@ -49,11 +62,12 @@ func runCall(cmd *cobra.Command, args []string) error {
 	defer actx.Close()
 
 	// 2. Kokoro engine (TTS).
+	modelDir := resolve(conf.Model.Dir)
 	eng, err := engine.NewTTSEngine(
-		filepath.Join(conf.Model.Dir, conf.Model.ModelFile),
-		filepath.Join(conf.Model.Dir, conf.Model.VoicesFile),
-		filepath.Join(conf.Model.Dir, conf.Model.TokensFile),
-		filepath.Join(conf.Model.Dir, conf.Model.DataDir),
+		filepath.Join(modelDir, conf.Model.ModelFile),
+		filepath.Join(modelDir, conf.Model.VoicesFile),
+		filepath.Join(modelDir, conf.Model.TokensFile),
+		filepath.Join(modelDir, conf.Model.DataDir),
 	)
 	if err != nil {
 		return fmt.Errorf("engine init: %w", err)
@@ -64,7 +78,7 @@ func runCall(cmd *cobra.Command, args []string) error {
 		ServerPath:       conf.Freeman.STT.ServerPath,
 		Host:             "127.0.0.1",
 		Port:             conf.Freeman.STT.ServerPort,
-		ModelPath:        conf.Freeman.STT.ModelPath,
+		ModelPath:        resolve(conf.Freeman.STT.ModelPath),
 		StartupTimeoutMs: conf.Freeman.STT.StartupTimeoutMS,
 	})
 	fmt.Fprintln(os.Stderr, "freeman: warming up whisper…")
@@ -135,24 +149,26 @@ func runCall(cmd *cobra.Command, args []string) error {
 	}
 	defer hk.Stop()
 
-	// 9. TaskManager (no task running yet).
-	repoRoot, err := findRepoRoot()
-	if err != nil {
-		return err
-	}
-	taskMgr := conv.NewTaskManager(repoRoot)
+	// 9. Agent backend.
+	chatAgent := picoding.NewChatAgent(repoRoot)
+	taskFactory := picoding.NewTaskAgentFactory(repoRoot, conf.Freeman.Worker.DefaultModel, conf.Freeman.Worker.OpusModel)
+
+	// 10. TaskManager (no task running yet).
+	taskMgr := conv.NewTaskManager(taskFactory, logger)
 	defer taskMgr.Close()
 
-	// 10. Conv session.
+	// 11. Conv session.
 	convSession, err := conv.NewSession(ctx, conv.Deps{
-		Transcriber:  tr,
-		Speaker:      sp,
-		Hotkey:       hk,
-		SpeechOnsets: v.SpeechOnsets(),
-		TaskManager:  taskMgr,
-		RepoRoot:     repoRoot,
-		Model:        conf.Freeman.PM.Model,
-		Logger:       logger,
+		Transcriber:   tr,
+		Speaker:       sp,
+		Hotkey:        hk,
+		SpeechOnsets:  v.SpeechOnsets(),
+		TaskManager:   taskMgr,
+		ChatAgent:     chatAgent,
+		ModelResolver: taskFactory.ResolveModel,
+		RepoRoot:      repoRoot,
+		Model:         conf.Freeman.PM.Model,
+		Logger:        logger,
 	})
 	if err != nil {
 		return fmt.Errorf("conv session: %w", err)
@@ -163,9 +179,37 @@ func runCall(cmd *cobra.Command, args []string) error {
 	return convSession.Run(ctx)
 }
 
-// findRepoRoot walks up from the current working directory until it finds go.mod.
+// newlineWriter wraps an io.Writer and prepends "\r\n" before each write.
+// C libraries (sherpa-onnx, espeak-ng, malgo) occasionally write to fd 2
+// without a trailing newline, leaving the terminal cursor mid-line. The
+// carriage return resets the cursor to column 0 so slog lines aren't offset.
+type newlineWriter struct{ w io.Writer }
+
+func (n newlineWriter) Write(p []byte) (int, error) {
+	if _, err := n.w.Write([]byte("\r\n")); err != nil {
+		return 0, err
+	}
+	return n.w.Write(p)
+}
+
+// findRepoRoot locates the project root by walking up from the binary's
+// directory (so it works regardless of cwd), then falls back to cwd.
 func findRepoRoot() (string, error) {
-	dir, err := os.Getwd()
+	exe, err := os.Executable()
+	if err == nil {
+		exe, _ = filepath.EvalSymlinks(exe)
+		if root, err := walkUpForGoMod(filepath.Dir(exe)); err == nil {
+			return root, nil
+		}
+	}
+	if root, err := walkUpForGoMod("."); err == nil {
+		return root, nil
+	}
+	return "", fmt.Errorf("go.mod not found (checked binary dir and cwd)")
+}
+
+func walkUpForGoMod(start string) (string, error) {
+	dir, err := filepath.Abs(start)
 	if err != nil {
 		return "", err
 	}
@@ -175,7 +219,7 @@ func findRepoRoot() (string, error) {
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return "", fmt.Errorf("go.mod not found walking up from cwd")
+			return "", fmt.Errorf("go.mod not found")
 		}
 		dir = parent
 	}

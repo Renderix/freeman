@@ -16,12 +16,19 @@ import { getModel, Type } from "@mariozechner/pi-ai";
 
 // ─── Protocol ───────────────────────────────────────────────────────────────
 
+type ToolActivityEntry = {
+  tool: string;
+  path?: string;
+  command?: string;
+  ok: boolean;
+};
+
 type TaskStateMsg =
   | { state: "none" }
-  | { state: "running" }
-  | { state: "needs_input"; question: string }
-  | { state: "done"; summary: string }
-  | { state: "failed"; message: string };
+  | { state: "running"; activity_log?: ToolActivityEntry[] }
+  | { state: "needs_input"; question: string; activity_log?: ToolActivityEntry[] }
+  | { state: "done"; summary: string; activity_log?: ToolActivityEntry[] }
+  | { state: "failed"; message: string; activity_log?: ToolActivityEntry[] };
 
 type InitMsg = {
   type: "init";
@@ -40,26 +47,49 @@ type ToolResultMsg = {
   call_id: string;
   result: any;
 };
+type TaskUpdateMsg = {
+  type: "task_update";
+  id: string;
+  task_state: TaskStateMsg;
+};
 type ShutdownMsg = { type: "shutdown" };
-type InMsg = InitMsg | UserSayMsg | ToolResultMsg | ShutdownMsg;
+type InMsg = InitMsg | UserSayMsg | ToolResultMsg | TaskUpdateMsg | ShutdownMsg;
 
 function send(out: Writable, obj: Record<string, unknown>): void {
   out.write(JSON.stringify(obj) + "\n");
 }
 
 function formatTaskState(s: TaskStateMsg): string {
+  let base: string;
   switch (s.state) {
     case "none":
       return "no background task";
     case "running":
-      return "background task is running";
+      base = "background task is running";
+      break;
     case "needs_input":
-      return `background task is waiting for an answer to: ${s.question}`;
+      base = `background task is waiting for an answer to: ${s.question}`;
+      break;
     case "done":
-      return `background task finished. summary: ${s.summary}`;
+      base = `background task finished. summary: ${s.summary}`;
+      break;
     case "failed":
-      return `background task failed: ${s.message}`;
+      base = `background task failed: ${s.message}`;
+      break;
   }
+
+  const log = "activity_log" in s ? s.activity_log : undefined;
+  if (log && log.length > 0) {
+    const lines = log.map((a) => {
+      const target = a.path || a.command || "";
+      const status = a.ok ? "ok" : "FAILED";
+      return `  ${a.tool} ${target} [${status}]`;
+    });
+    base += "\nactivity:\n" + lines.join("\n");
+  } else if (s.state === "done" || s.state === "failed") {
+    base += "\nactivity: no tool calls were recorded for this task";
+  }
+  return base;
 }
 
 // ─── Custom tools ───────────────────────────────────────────────────────────
@@ -222,6 +252,25 @@ export function runConvSidecar(
     }
   }
 
+  async function runTaskUpdate(msg: TaskUpdateMsg): Promise<void> {
+    if (!session) return;
+    const id = msg.id;
+    currentUserSayId = id;
+    const promptText = `[background task: ${formatTaskState(msg.task_state)}]`;
+    try {
+      await session.prompt(promptText);
+      send(out, { type: "turn_end", id });
+    } catch (err: unknown) {
+      send(out, {
+        type: "error",
+        id,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      currentUserSayId = null;
+    }
+  }
+
   async function runShutdown(): Promise<void> {
     if (session) {
       try {
@@ -247,6 +296,7 @@ export function runConvSidecar(
     if (msg.type === "init") void runInit(msg);
     else if (msg.type === "user_say") void runUserSay(msg);
     else if (msg.type === "tool_result") runToolResult(msg);
+    else if (msg.type === "task_update") void runTaskUpdate(msg);
     else if (msg.type === "shutdown") void runShutdown();
   });
 }

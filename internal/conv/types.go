@@ -1,13 +1,13 @@
-// Package conv hosts the conversational call layer that replaces the
-// narrow Plan 3 intake state machine. A long-lived ConvSession runs the
-// chat LLM; a TaskManager owns at most one background coding task; the
-// Go side here is a thin router between mic, conv-sidecar, task sidecar,
-// and speaker.
+// Package conv hosts the conversational call layer. A long-lived
+// ChatAgent runs the chat LLM; a TaskManager owns at most one
+// background coding task; the Go side here is a thin router between
+// mic, agent, task manager, and speaker.
 package conv
 
+import "github.com/Renderix/freeman/internal/agent"
+
 // Objective is a structured task spec the chat LLM hands to TaskManager
-// when it calls the start_task tool. Mirrors what the existing
-// sidecar.Client expects via sidecar.ObjectivePayload.
+// when it calls the start_task tool.
 type Objective struct {
 	Goal               string   `json:"goal"`
 	AcceptanceCriteria []string `json:"acceptance_criteria"`
@@ -15,6 +15,16 @@ type Objective struct {
 	Notes              []string `json:"notes"`
 	ModelHint          string   `json:"model_hint"` // "sonnet" or "opus"
 	SpokenSummary      string   `json:"spoken_summary"`
+}
+
+func (o Objective) ToAgentObjective() agent.Objective {
+	return agent.Objective{
+		Goal:               o.Goal,
+		AcceptanceCriteria: o.AcceptanceCriteria,
+		Constraints:        o.Constraints,
+		Notes:              o.Notes,
+		ModelHint:          o.ModelHint,
+	}
 }
 
 // TaskStateKind is the lifecycle of the single background task tracked
@@ -47,11 +57,10 @@ func (k TaskStateKind) String() string {
 // TaskState is a snapshot of the current background task's state.
 // Unused fields for the current Kind are left at their zero value.
 type TaskState struct {
-	Kind     TaskStateKind
-	Question string // valid when Kind == TaskStateNeedsInput
-	Summary  string // valid when Kind == TaskStateDone
-	Message  string // valid when Kind == TaskStateFailed
-	// AskUserID is the sidecar-issued correlation id for the current
-	// needs_input question. Used by Reply() to forward the answer.
-	AskUserID string
+	Kind        TaskStateKind
+	Question    string // valid when Kind == TaskStateNeedsInput
+	Summary     string // valid when Kind == TaskStateDone
+	Message     string // valid when Kind == TaskStateFailed
+	AskUserID   string
+	ActivityLog []agent.ToolActivity
 }

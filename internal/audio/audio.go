@@ -96,6 +96,24 @@ func (n *NoopMuter) IsMuted() bool {
 	return n.muted
 }
 
+// MultiMuter fans Mute/Unmute out to several underlying muters.
+// Used to gate both the Transcriber and the VAD from one Speaker call.
+type MultiMuter struct {
+	Muters []Muter
+}
+
+func (m *MultiMuter) Mute() {
+	for _, x := range m.Muters {
+		x.Mute()
+	}
+}
+
+func (m *MultiMuter) Unmute() {
+	for _, x := range m.Muters {
+		x.Unmute()
+	}
+}
+
 type discardWriter struct{}
 
 func (discardWriter) Write(p []byte) (int, error) { return len(p), nil }

@@ -16,6 +16,7 @@ const (
 	// Sidecar → Freeman
 	MsgTypeAssistantText = "assistant_text"
 	MsgTypeAskUser       = "ask_user"
+	MsgTypeToolActivity  = "tool_activity"
 	MsgTypeDone          = "done"
 	MsgTypeError         = "error"
 )
@@ -81,6 +82,17 @@ type DoneMsg struct {
 
 func (DoneMsg) isMessage() {}
 
+// ToolActivityMsg is a concise record of a tool execution in the task sidecar.
+type ToolActivityMsg struct {
+	Type    string `json:"type"`
+	Tool    string `json:"tool"`
+	Path    string `json:"path,omitempty"`
+	Command string `json:"command,omitempty"`
+	Ok      bool   `json:"ok"`
+}
+
+func (ToolActivityMsg) isMessage() {}
+
 // ErrorMsg is an error from the sidecar.
 type ErrorMsg struct {
 	Type    string `json:"type"`
@@ -137,6 +149,12 @@ func Decode(line []byte) (Message, error) {
 		return m, nil
 	case MsgTypeAskUser:
 		var m AskUserMsg
+		if err := json.Unmarshal(line, &m); err != nil {
+			return nil, err
+		}
+		return m, nil
+	case MsgTypeToolActivity:
+		var m ToolActivityMsg
 		if err := json.Unmarshal(line, &m); err != nil {
 			return nil, err
 		}

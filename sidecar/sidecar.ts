@@ -6,6 +6,7 @@ import * as readline from "node:readline";
 import type { Readable, Writable } from "node:stream";
 import {
   createAgentSession,
+  DefaultResourceLoader,
   SessionManager,
   defineTool,
   type AgentSession,
@@ -145,20 +146,49 @@ export function runSidecar(
     }
   });
 
+  // Emit debug diagnostics only when SIDECAR_DEBUG=1 is set.
+  // Without this guard these lines bleed directly into Freeman's stderr
+  // (the Go parent sets cmd.Stderr = os.Stderr) and appear as untagged
+  // "trading log lines" when the task summary contains domain terminology.
+  const debug = process.env.SIDECAR_DEBUG === "1";
+
   async function runSession(msg: StartMsg): Promise<void> {
     try {
+      if (debug) console.error("[sidecar] runSession starting, model=%s", msg.objective.model);
       const model = getModel("anthropic", msg.objective.model as never);
+      const loader = new DefaultResourceLoader({
+        systemPromptOverride: () => buildPrompt(msg.objective),
+        appendSystemPromptOverride: () => [],
+      });
+      await loader.reload();
+      if (debug) console.error("[sidecar] creating agent session");
       const { session } = await createSession({
         model,
         customTools: [askUserTool],
+        resourceLoader: loader,
         sessionManager: SessionManager.inMemory(),
       });
       currentSession = session;
+      if (debug) console.error("[sidecar] session created, prompting");
 
       let finalMessages: AgentMessage[] = [];
+      const pendingArgs = new Map<string, any>();
       const unsubscribe = session.subscribe((event) => {
         if (event.type === "agent_end") {
           finalMessages = event.messages;
+        } else if (event.type === "tool_execution_start") {
+          pendingArgs.set(event.toolCallId, event.args);
+        } else if (event.type === "tool_execution_end") {
+          const args = pendingArgs.get(event.toolCallId) ?? {};
+          pendingArgs.delete(event.toolCallId);
+          const entry = extractActivity({
+            toolName: event.toolName,
+            args,
+            isError: event.isError,
+          });
+          if (entry) {
+            send(out, { type: "tool_activity", ...entry });
+          }
         }
       });
 
@@ -168,15 +198,39 @@ export function runSidecar(
         unsubscribe();
       }
 
-      const raw = extractFinalText(finalMessages);
-      const summary = raw.split(/[.!?]/)[0]?.trim() || "done";
+      const summary = extractFinalText(finalMessages);
+      if (debug) console.error("[sidecar] done, summary=%s", summary.slice(0, 120));
       send(out, { type: "done", summary });
       exit(0);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
+      // Always emit errors — they indicate a real failure, not routine progress.
+      console.error("[sidecar] error: %s", message);
       send(out, { type: "error", message });
       exit(1);
     }
+  }
+}
+
+function extractActivity(event: {
+  toolName: string;
+  args: any;
+  isError: boolean;
+}): { tool: string; path: string; command: string; ok: boolean } | null {
+  const { toolName, args, isError } = event;
+  switch (toolName) {
+    case "edit":
+    case "write":
+    case "read":
+      return { tool: toolName, path: args?.file_path ?? args?.path ?? "", command: "", ok: !isError };
+    case "bash":
+      return { tool: "bash", path: "", command: (args?.command ?? "").slice(0, 80), ok: !isError };
+    case "grep":
+    case "find":
+    case "ls":
+      return { tool: toolName, path: args?.path ?? args?.directory ?? "", command: "", ok: !isError };
+    default:
+      return null;
   }
 }
 

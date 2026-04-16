@@ -75,10 +75,18 @@ func Open(actx *audio.Context, cfg Config, synth Synthesizer, muter audio.Muter)
 }
 
 // Speak synthesizes and plays text. Blocks until playback drains or ctx cancels.
-// Muter is called as: Mute before, Unmute deferred.
+// Muter is called as: Mute before (covering synth + playback so VAD can't fire
+// spurious barge-ins during synthesis), Unmute deferred.
 func (s *Speaker) Speak(ctx context.Context, text string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Mute before synthesis so any VAD listeners are silenced during the
+	// synthesis window. Otherwise a SpeakEffect has already been dispatched
+	// by the session but VAD is still live, and mic noise during synth can
+	// cancel the speak before a single sample plays.
+	s.muter.Mute()
+	defer s.muter.Unmute()
 
 	samples, sr, err := s.synth.GeneratePCM(text, s.voice, s.speed)
 	if err != nil {
@@ -95,9 +103,6 @@ func (s *Speaker) Speak(ctx context.Context, text string) error {
 		}
 		s.sink = sink
 	}
-
-	s.muter.Mute()
-	defer s.muter.Unmute()
 
 	chunkSize := sr * s.chunkMs / 1000
 	for off := 0; off < len(samples); off += chunkSize {
@@ -129,18 +134,19 @@ func (s *Speaker) Close() error {
 	return err
 }
 
-// malgoSink is the production pcmSink.
+// malgoSink is the production pcmSink. Samples accumulate in a single
+// buffer under a mutex; the audio callback copies from the front and
+// shrinks the buffer. Silence is only emitted when the buffer is
+// genuinely empty (end-of-utterance or idle), never on producer jitter.
 type malgoSink struct {
-	dev     *malgo.Device
-	ch      chan []int16
-	pending []int16
-	mu      sync.Mutex // protects pending
+	dev *malgo.Device
+
+	mu  sync.Mutex
+	buf []int16 // pending samples, consumed from the front by the callback
 }
 
 func newMalgoSink(actx *audio.Context, sampleRate, channels int) (*malgoSink, error) {
-	m := &malgoSink{
-		ch: make(chan []int16, 16),
-	}
+	m := &malgoSink{}
 	cfg := malgo.DefaultDeviceConfig(malgo.Playback)
 	cfg.Playback.Format = malgo.FormatS16
 	cfg.Playback.Channels = uint32(channels)
@@ -150,36 +156,12 @@ func newMalgoSink(actx *audio.Context, sampleRate, channels int) (*malgoSink, er
 		Data: func(pOutput, _ []byte, frameCount uint32) {
 			need := int(frameCount) * channels
 			out := unsafe.Slice((*int16)(unsafe.Pointer(&pOutput[0])), need)
-			filled := 0
 			m.mu.Lock()
-			if len(m.pending) > 0 {
-				n := copy(out, m.pending)
-				filled += n
-				m.pending = m.pending[n:]
-			}
+			n := copy(out, m.buf)
+			m.buf = m.buf[n:]
 			m.mu.Unlock()
-			for filled < need {
-				select {
-				case chunk, ok := <-m.ch:
-					if !ok {
-						for i := filled; i < need; i++ {
-							out[i] = 0
-						}
-						return
-					}
-					n := copy(out[filled:], chunk)
-					if n < len(chunk) {
-						m.mu.Lock()
-						m.pending = chunk[n:]
-						m.mu.Unlock()
-					}
-					filled += n
-				default:
-					for i := filled; i < need; i++ {
-						out[i] = 0
-					}
-					return
-				}
+			for i := n; i < need; i++ {
+				out[i] = 0
 			}
 		},
 	}
@@ -197,16 +179,16 @@ func newMalgoSink(actx *audio.Context, sampleRate, channels int) (*malgoSink, er
 }
 
 func (m *malgoSink) write(samples []int16) error {
-	cp := make([]int16, len(samples))
-	copy(cp, samples)
-	m.ch <- cp
+	m.mu.Lock()
+	m.buf = append(m.buf, samples...)
+	m.mu.Unlock()
 	return nil
 }
 
 func (m *malgoSink) drain(ctx context.Context) error {
-	// Poll until the send channel and pending tail are both empty. The audio
-	// callback does not signal directly when it finishes a chunk, so a short
-	// sleep between checks is the simplest correct approach.
+	// Poll until the buffer is empty. Audio hardware consumes at real-time,
+	// so a short sleep between checks keeps the goroutine cheap without
+	// meaningfully affecting end-of-playback latency.
 	for {
 		select {
 		case <-ctx.Done():
@@ -214,10 +196,10 @@ func (m *malgoSink) drain(ctx context.Context) error {
 		default:
 		}
 		m.mu.Lock()
-		pendingEmpty := len(m.pending) == 0
+		empty := len(m.buf) == 0
 		m.mu.Unlock()
-		if len(m.ch) == 0 && pendingEmpty {
-			// All samples handed to hardware; wait one extra audio frame for hardware to finish.
+		if empty {
+			// Wait one extra audio period for hardware to finish the tail.
 			time.Sleep(20 * time.Millisecond)
 			return nil
 		}
@@ -232,6 +214,5 @@ func (m *malgoSink) close() error {
 	_ = m.dev.Stop()
 	m.dev.Uninit()
 	m.dev = nil
-	close(m.ch)
 	return nil
 }

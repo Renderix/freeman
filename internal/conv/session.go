@@ -1,18 +1,16 @@
 package conv
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
-	"os/exec"
-	"path/filepath"
-	"strconv"
 	"strings"
+	"strconv"
 	"sync"
 	"sync/atomic"
+
+	"github.com/Renderix/freeman/internal/agent"
 )
 
 // Transcriber is the subset of stt.Transcriber the conv layer needs.
@@ -34,15 +32,17 @@ type Hotkey interface {
 
 // Deps are the runtime dependencies injected into a Session.
 type Deps struct {
-	Transcriber  Transcriber
-	Speaker      Speaker
-	Hotkey       Hotkey
-	SpeechOnsets <-chan struct{}
-	TaskManager  *TaskManager
+	Transcriber   Transcriber
+	Speaker       Speaker
+	Hotkey        Hotkey
+	SpeechOnsets  <-chan struct{}
+	TaskManager   *TaskManager
+	ChatAgent     agent.ChatAgent
+	ModelResolver func(hint string) string
 
-	RepoRoot     string // used to locate sidecar/conv-sidecar.ts
-	Model        string // e.g. "claude-haiku-4-5"
 	SystemPrompt string // chat system prompt (see DefaultSystemPrompt)
+	Model        string // e.g. "claude-haiku-4-5"
+	RepoRoot     string // used to read project context
 	Logger       *slog.Logger
 }
 
@@ -58,7 +58,7 @@ ABSOLUTE RULES:
 WHAT YOU CAN DO:
 - Chat about general topics using your knowledge.
 - Answer questions about this specific project using the project context provided below. If the project context doesn't have what you need, say so honestly — do not make things up.
-- Spawn a background coding task by calling the start_task tool. Use this when the user clearly asks you to build, fix, refactor, or implement something concrete. Do not use it for questions or chat.
+- Spawn a background task by calling the start_task tool. Use this whenever the user asks you to do anything that touches the codebase — building, fixing, investigating, checking git status, reading files, running commands, or answering questions about the code. This is your only way to interact with the repo. Only skip it for pure chat that needs no codebase access.
 - Forward the user's answer to a running task by calling reply_to_task. The task is asking when the background task state shows needs_input.
 - Cancel a task with cancel_task only when the user explicitly says to stop.
 
@@ -67,42 +67,38 @@ ON BACKGROUND TASKS:
 - Tasks run in parallel with the conversation; don't wait for them.
 `
 
-// Session is the conv-layer event loop. It owns the conv-sidecar
-// subprocess and routes between mic, sidecar, taskmgr, and speaker.
+// Session is the conv-layer event loop. It routes between mic,
+// ChatAgent, TaskManager, and speaker.
 type Session struct {
 	deps Deps
 	log  *slog.Logger
 
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	stdout io.ReadCloser
-
-	mu      sync.Mutex
-	pending map[string]chan inboundMsg
-	closed  bool
-
 	nextID atomic.Uint64
 
-	// The current in-flight assistant turn id. Receiving an
-	// assistant_say with an id != currentTurnID is dropped.
 	turnMu        sync.Mutex
 	currentTurnID string
 	turnCanceled  bool
 
-	// speak goroutine state, owned by Run.
-	cancelSpeak  func()
-	speakDone    chan struct{}
+	cancelSpeak   func()
+	speakDone     chan struct{}
 	speakRequests chan string
 
-	// one assistantBuffer per session; reset on each turn start.
-	assistantBuf *assistantBuffer
+	convBusy          bool
+	pendingText       *string
+	pendingTaskUpdate *taskUpdatePayload
+	turnEnded         chan struct{}
 
-	wg sync.WaitGroup
+	assistantBuf *assistantBuffer
 }
 
-// NewSession spawns conv-sidecar and prepares the Session. Run() must
-// be called to drive the event loop.
-func NewSession(ctx context.Context, deps Deps) (*Session, error) {
+type taskUpdatePayload struct {
+	turnID    string
+	taskState agent.TaskStateSnapshot
+}
+
+// NewSession prepares a Session. The ChatAgent is initialized during
+// Run(), not here.
+func NewSession(_ context.Context, deps Deps) (*Session, error) {
 	log := deps.Logger
 	if log == nil {
 		log = slog.Default()
@@ -110,171 +106,73 @@ func NewSession(ctx context.Context, deps Deps) (*Session, error) {
 	if deps.SystemPrompt == "" {
 		deps.SystemPrompt = DefaultSystemPrompt
 	}
-	if deps.Model == "" {
-		deps.Model = "claude-haiku-4-5"
-	}
-
-	scriptPath := filepath.Join(deps.RepoRoot, "sidecar", "conv-sidecar.ts")
-	cmd := exec.CommandContext(ctx, "bun", "run", scriptPath)
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, fmt.Errorf("conv stdin: %w", err)
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("conv stdout: %w", err)
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("conv start: %w", err)
-	}
 
 	s := &Session{
 		deps:          deps,
 		log:           log,
-		cmd:           cmd,
-		stdin:         stdin,
-		stdout:        stdout,
-		pending:       make(map[string]chan inboundMsg),
 		speakDone:     make(chan struct{}, 1),
 		speakRequests: make(chan string, 16),
+		turnEnded:     make(chan struct{}, 1),
 		assistantBuf:  &assistantBuffer{},
 	}
-
-	s.wg.Add(1)
-	go s.readLoop()
-
-	// Send init and wait for ready.
-	projectCtx := Read(deps.RepoRoot)
-	readyCh := s.registerWait("__ready__")
-	if err := s.send(initMsg{
-		Type:           "init",
-		SystemPrompt:   deps.SystemPrompt,
-		ProjectContext: projectCtx,
-		Model:          deps.Model,
-	}); err != nil {
-		s.Close()
-		return nil, fmt.Errorf("conv send init: %w", err)
-	}
-	select {
-	case <-readyCh:
-		// good
-	case <-ctx.Done():
-		s.Close()
-		return nil, ctx.Err()
-	}
-
 	return s, nil
 }
 
 func (s *Session) Close() error {
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		s.wg.Wait()
-		return nil
-	}
-	s.closed = true
-	s.mu.Unlock()
-
-	_ = s.send(shutdownMsg{Type: "shutdown"})
-	_ = s.stdin.Close()
-	if s.cmd != nil && s.cmd.Process != nil {
-		_ = s.cmd.Process.Kill()
-		_ = s.cmd.Wait()
-	}
-	if rc, ok := any(s.stdout).(io.Closer); ok {
-		_ = rc.Close()
-	}
-	s.wg.Wait()
-	return nil
-}
-
-func (s *Session) send(v any) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return fmt.Errorf("conv: closed")
-	}
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-	b = append(b, '\n')
-	_, err = s.stdin.Write(b)
-	return err
+	return s.deps.ChatAgent.Close()
 }
 
 func (s *Session) nextRequestID() string {
 	return strconv.FormatUint(s.nextID.Add(1), 10)
 }
 
-func (s *Session) registerWait(id string) chan inboundMsg {
-	ch := make(chan inboundMsg, 1)
-	s.mu.Lock()
-	s.pending[id] = ch
-	s.mu.Unlock()
-	return ch
-}
-
-// readLoop demultiplexes messages from conv-sidecar.
-func (s *Session) readLoop() {
-	defer s.wg.Done()
-	scanner := bufio.NewScanner(s.stdout)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		var msg inboundMsg
-		if err := json.Unmarshal(line, &msg); err != nil {
-			s.log.Error("conv: bad json from sidecar", "err", err)
-			continue
-		}
-		switch msg.Type {
-		case "ready":
-			s.mu.Lock()
-			ch, ok := s.pending["__ready__"]
-			if ok {
-				delete(s.pending, "__ready__")
-			}
-			s.mu.Unlock()
-			if ok {
-				ch <- msg
-			}
-		case "assistant_say":
-			s.handleAssistantSay(msg)
-		case "tool_call":
-			s.handleToolCall(msg)
-		case "turn_end":
-			s.handleTurnEnd(msg)
-		case "error":
-			s.log.Error("conv sidecar error", "msg", msg.Message)
-		}
-	}
-}
-
-// Run drives the call until ctx is canceled. Spawns goroutines for
-// streaming TTS and background task event delivery.
+// Run drives the call until ctx is canceled.
 func (s *Session) Run(ctx context.Context) error {
+	projectCtx := Read(s.deps.RepoRoot)
+	if err := s.deps.ChatAgent.Init(ctx, agent.ChatConfig{
+		SystemPrompt:   s.deps.SystemPrompt,
+		ProjectContext: projectCtx,
+		Model:          s.deps.Model,
+	}); err != nil {
+		return fmt.Errorf("chat agent init: %w", err)
+	}
+
 	utterances := s.deps.Transcriber.Utterances()
 	hotkeys := s.deps.Hotkey.Events()
 	taskEvents := s.deps.TaskManager.Events()
+	chatEvents := s.deps.ChatAgent.Events()
 	speechOnsets := s.deps.SpeechOnsets
 	if speechOnsets == nil {
 		speechOnsets = make(chan struct{})
 	}
 
-	// Latest task state observed via TaskManager.Events; used when assembling
-	// each user_say so the LLM sees current state in its prompt.
 	currentTaskState := s.deps.TaskManager.Status()
 
-	// On hotkey, send a synthetic seed user_say so the LLM produces a greeting.
 	greet := func() {
+		if s.convBusy {
+			s.log.Info("conv busy — ignoring hotkey")
+			return
+		}
+		for {
+			select {
+			case _, ok := <-utterances:
+				if !ok {
+					utterances = nil
+				}
+				continue
+			default:
+			}
+			break
+		}
 		s.dispatchUserSay("<call started>", currentTaskState)
 	}
 
 	for {
+		var speakCh <-chan string
+		if s.cancelSpeak == nil {
+			speakCh = s.speakRequests
+		}
+
 		select {
 		case <-ctx.Done():
 			return nil
@@ -289,6 +187,12 @@ func (s *Session) Run(ctx context.Context) error {
 				continue
 			}
 			s.log.Info("heard", "text", text)
+			if s.convBusy {
+				s.log.Info("conv busy — buffering", "text", text)
+				t := text
+				s.pendingText = &t
+				continue
+			}
 			s.dispatchUserSay(text, currentTaskState)
 
 		case ev, ok := <-taskEvents:
@@ -298,8 +202,46 @@ func (s *Session) Run(ctx context.Context) error {
 			}
 			currentTaskState = ev.State
 			s.log.Info("task state", "kind", ev.State.Kind.String())
+			if ev.State.Kind == TaskStateDone || ev.State.Kind == TaskStateFailed || ev.State.Kind == TaskStateNeedsInput {
+				snap := taskStateToSnapshot(ev.State)
+				if s.convBusy {
+					id := s.nextRequestID()
+					s.pendingTaskUpdate = &taskUpdatePayload{turnID: id, taskState: snap}
+				} else {
+					s.dispatchTaskUpdate(snap)
+				}
+			}
 
-		case text := <-s.speakRequests:
+		case ev, ok := <-chatEvents:
+			if !ok {
+				chatEvents = nil
+				continue
+			}
+			switch ev.Type {
+			case "assistant_say":
+				s.handleAssistantSay(ev)
+			case "tool_call":
+				s.handleToolCall(ev)
+			case "turn_end":
+				s.handleTurnEnd(ev)
+			case "error":
+				s.log.Error("chat agent error", "msg", ev.Error)
+			}
+
+		case <-s.turnEnded:
+			s.convBusy = false
+			if s.pendingTaskUpdate != nil {
+				p := s.pendingTaskUpdate
+				s.pendingTaskUpdate = nil
+				s.dispatchTaskUpdate(p.taskState)
+			} else if s.pendingText != nil {
+				text := *s.pendingText
+				s.pendingText = nil
+				s.log.Info("conv free — dispatching pending", "text", text)
+				s.dispatchUserSay(text, currentTaskState)
+			}
+
+		case text := <-speakCh:
 			s.startSpeak(text)
 
 		case <-s.speakDone:
@@ -316,17 +258,35 @@ func (s *Session) Run(ctx context.Context) error {
 	}
 }
 
-func (s *Session) dispatchUserSay(text string, state TaskState) {
+func (s *Session) dispatchTaskUpdate(snap agent.TaskStateSnapshot) {
+	s.convBusy = true
 	id := s.nextRequestID()
 	s.setTurn(id)
-	payload := userSayMsg{
-		Type:      "user_say",
-		ID:        id,
-		Text:      text,
-		TaskState: taskStateToPayload(state),
+	if err := s.deps.ChatAgent.TaskUpdate(id, snap); err != nil {
+		s.convBusy = false
+		s.log.Error("chat agent task_update", "err", err)
 	}
-	if err := s.send(payload); err != nil {
-		s.log.Error("conv send user_say", "err", err)
+}
+
+func (s *Session) dispatchUserSay(text string, state TaskState) {
+	s.convBusy = true
+	s.pendingText = nil
+	id := s.nextRequestID()
+	s.setTurn(id)
+	snap := taskStateToSnapshot(state)
+	if err := s.deps.ChatAgent.Say(id, text, snap); err != nil {
+		s.convBusy = false
+		s.log.Error("chat agent say", "err", err)
+	}
+}
+
+func taskStateToSnapshot(s TaskState) agent.TaskStateSnapshot {
+	return agent.TaskStateSnapshot{
+		State:       s.Kind.String(),
+		Question:    s.Question,
+		Summary:     s.Summary,
+		Message:     s.Message,
+		ActivityLog: s.ActivityLog,
 	}
 }
 
@@ -349,9 +309,6 @@ func (s *Session) turnActive(id string) bool {
 	return id == s.currentTurnID && !s.turnCanceled
 }
 
-// assistantBuf accumulates streaming text; we flush on sentence boundary
-// or turn end. Owned by handleAssistantSay/handleTurnEnd which run on
-// the readLoop goroutine.
 var sentenceTerminators = ".!?"
 
 type assistantBuffer struct {
@@ -393,28 +350,28 @@ func (b *assistantBuffer) drain() string {
 	return out
 }
 
-func (s *Session) handleAssistantSay(msg inboundMsg) {
-	if !s.turnActive(msg.ID) {
+func (s *Session) handleAssistantSay(ev agent.ChatEvent) {
+	if !s.turnActive(ev.ID) {
 		return
 	}
-	sentences := s.assistantBuf.appendAndFlush(msg.Text)
+	sentences := s.assistantBuf.appendAndFlush(ev.Text)
 	for _, sent := range sentences {
 		s.speakSentence(sent)
 	}
 }
 
-func (s *Session) handleTurnEnd(msg inboundMsg) {
-	if !s.turnActive(msg.ID) {
+func (s *Session) handleTurnEnd(ev agent.ChatEvent) {
+	if !s.turnActive(ev.ID) {
 		s.assistantBuf.drain()
-		return
-	}
-	if rest := s.assistantBuf.drain(); rest != "" {
+	} else if rest := s.assistantBuf.drain(); rest != "" {
 		s.speakSentence(rest)
+	}
+	select {
+	case s.turnEnded <- struct{}{}:
+	default:
 	}
 }
 
-// speakSentence enqueues text onto speakRequests for the Run goroutine
-// to process. If the buffer is full the sentence is dropped with a warning.
 func (s *Session) speakSentence(text string) {
 	select {
 	case s.speakRequests <- text:
@@ -423,10 +380,6 @@ func (s *Session) speakSentence(text string) {
 	}
 }
 
-// startSpeak is called exclusively from the Run goroutine. It cancels any
-// in-flight speech, then launches a new Speak goroutine for text.
-// cancelSpeak is only ever written here, so reads in the same goroutine
-// (speakDone and speechOnsets cases) are race-free.
 func (s *Session) startSpeak(text string) {
 	if s.cancelSpeak != nil {
 		s.cancelSpeak()
@@ -444,15 +397,11 @@ func (s *Session) startSpeak(text string) {
 	}()
 }
 
-func (s *Session) handleToolCall(msg inboundMsg) {
+func (s *Session) handleToolCall(ev agent.ChatEvent) {
 	go func() {
-		result := s.runTool(msg.Name, msg.Args)
+		result := s.runTool(ev.Name, ev.Args)
 		raw, _ := json.Marshal(result)
-		_ = s.send(toolResultMsg{
-			Type:   "tool_result",
-			CallID: msg.CallID,
-			Result: raw,
-		})
+		_ = s.deps.ChatAgent.ToolResult(ev.CallID, raw)
 	}()
 }
 
@@ -470,6 +419,9 @@ func (s *Session) runTool(name string, args json.RawMessage) any {
 		var obj Objective
 		if err := json.Unmarshal(args, &obj); err != nil {
 			return toolErr{Ok: false, Error: fmt.Sprintf("bad args: %v", err)}
+		}
+		if s.deps.ModelResolver != nil {
+			obj.ModelHint = s.deps.ModelResolver(obj.ModelHint)
 		}
 		if err := s.deps.TaskManager.Start(context.Background(), obj); err != nil {
 			return toolErr{Ok: false, Error: err.Error()}
@@ -496,7 +448,8 @@ func (s *Session) runTool(name string, args json.RawMessage) any {
 
 	case "task_status":
 		st := s.deps.TaskManager.Status()
-		return taskStateToPayload(st)
+		snap := taskStateToSnapshot(st)
+		return snap
 
 	default:
 		return toolErr{Ok: false, Error: "unknown tool: " + name}

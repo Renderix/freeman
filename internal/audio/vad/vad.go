@@ -1,6 +1,9 @@
 package vad
 
-import "context"
+import (
+	"context"
+	"sync"
+)
 
 // Utterance is a completed user speech segment with end-of-speech already detected.
 type Utterance struct {
@@ -30,6 +33,9 @@ type VAD struct {
 	cfg    Config
 	det    Detector
 	onsets chan struct{}
+
+	mu    sync.Mutex
+	muted bool
 }
 
 // New returns a VAD backed by the WebRTC detector.
@@ -50,6 +56,28 @@ func NewWithDetector(cfg Config, d Detector) *VAD {
 // stateSilent → stateSpeech transition. The channel has capacity 1;
 // extra onsets are dropped rather than blocking the VAD goroutine.
 func (v *VAD) SpeechOnsets() <-chan struct{} { return v.onsets }
+
+// Mute implements audio.Muter. While muted, incoming frames are
+// dropped, any in-flight speech buffer is discarded, and no onsets
+// fire. Used by the Speaker to suppress self-echo during playback.
+func (v *VAD) Mute() {
+	v.mu.Lock()
+	v.muted = true
+	v.mu.Unlock()
+}
+
+// Unmute implements audio.Muter.
+func (v *VAD) Unmute() {
+	v.mu.Lock()
+	v.muted = false
+	v.mu.Unlock()
+}
+
+func (v *VAD) isMuted() bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.muted
+}
 
 // Run consumes 20 ms frames from `in` and emits completed utterances to the
 // returned channel. The channel closes when `in` closes or ctx is canceled.
@@ -87,6 +115,17 @@ func (v *VAD) Run(ctx context.Context, in <-chan []int16) <-chan Utterance {
 				if !ok {
 					flush()
 					return
+				}
+				// While muted, drop frames and discard any in-flight speech
+				// buffer so playback self-echo never leaks into the pipeline.
+				if v.isMuted() {
+					if state == stateSpeech || bufFrames > 0 {
+						buf = nil
+						bufFrames = 0
+						silenceFrames = 0
+						state = stateSilent
+					}
+					continue
 				}
 				isSpeech, err := v.det.IsSpeech(frame, v.cfg.SampleRate)
 				if err != nil {

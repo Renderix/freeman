@@ -3,10 +3,10 @@ package conv
 import (
 	"context"
 	"fmt"
-	"path/filepath"
+	"log/slog"
 	"sync"
 
-	"github.com/Renderix/freeman/internal/sidecar"
+	"github.com/Renderix/freeman/internal/agent"
 )
 
 // TaskEvent is emitted whenever the tracked task's state changes.
@@ -15,14 +15,14 @@ type TaskEvent struct {
 	State TaskState
 }
 
-// TaskManager owns at most one background pi-coding-agent task at a
-// time. It wraps a sidecar.Client over sidecar/sidecar.ts.
+// TaskManager owns at most one background coding task at a time.
 type TaskManager struct {
-	repoRoot string
+	factory agent.TaskAgentFactory
+	log     *slog.Logger
 
 	mu     sync.Mutex
 	state  TaskState
-	client *sidecar.Client
+	agent  agent.TaskAgent
 	cancel context.CancelFunc
 
 	events chan TaskEvent
@@ -30,13 +30,13 @@ type TaskManager struct {
 	wg sync.WaitGroup
 }
 
-// NewTaskManager constructs a manager that will spawn the task sidecar
-// from the given repo root. No subprocess is started until Start() is
-// called.
-func NewTaskManager(repoRoot string) *TaskManager {
+// NewTaskManager constructs a manager that will use the given factory
+// to create task agents. No agent is started until Start() is called.
+func NewTaskManager(factory agent.TaskAgentFactory, log *slog.Logger) *TaskManager {
 	return &TaskManager{
-		repoRoot: repoRoot,
-		events:   make(chan TaskEvent, 8),
+		factory: factory,
+		log:     log,
+		events:  make(chan TaskEvent, 8),
 	}
 }
 
@@ -51,7 +51,7 @@ func (m *TaskManager) Status() TaskState {
 	return m.state
 }
 
-// Start spawns the task sidecar and dispatches the objective. Errors
+// Start creates a new task agent and dispatches the objective. Errors
 // if a task is already in flight.
 func (m *TaskManager) Start(ctx context.Context, obj Objective) error {
 	m.mu.Lock()
@@ -59,47 +59,31 @@ func (m *TaskManager) Start(ctx context.Context, obj Objective) error {
 		m.mu.Unlock()
 		return fmt.Errorf("task already running")
 	}
-	// Reset stale done/failed state before launching a new one.
 	m.state = TaskState{}
 
-	scriptPath := filepath.Join(m.repoRoot, "sidecar", "sidecar.ts")
+	ta := m.factory.NewTaskAgent()
 	taskCtx, cancel := context.WithCancel(ctx)
-	client, err := sidecar.Spawn(taskCtx, "bun", "run", scriptPath)
-	if err != nil {
-		cancel()
-		m.mu.Unlock()
-		return fmt.Errorf("spawn task sidecar: %w", err)
-	}
-	m.client = client
+	m.agent = ta
 	m.cancel = cancel
 	m.state = TaskState{Kind: TaskStateRunning}
 	m.mu.Unlock()
 
-	if err := client.Send(sidecar.StartMsg{
-		Type: sidecar.MsgTypeStart,
-		Objective: sidecar.ObjectivePayload{
-			Goal:               obj.Goal,
-			AcceptanceCriteria: obj.AcceptanceCriteria,
-			Constraints:        obj.Constraints,
-			Notes:              obj.Notes,
-			Model:              obj.ModelHint,
-		},
-	}); err != nil {
+	if err := ta.Start(taskCtx, obj.ToAgentObjective()); err != nil {
 		m.mu.Lock()
 		m.cancelLocked()
 		m.mu.Unlock()
-		m.transition(TaskState{Kind: TaskStateFailed, Message: fmt.Sprintf("send start: %v", err)})
+		m.transition(TaskState{Kind: TaskStateFailed, Message: fmt.Sprintf("start task: %v", err)})
 		return err
 	}
 
 	m.transition(TaskState{Kind: TaskStateRunning})
 
 	m.wg.Add(1)
-	go m.readLoop(client)
+	go m.readLoop(ta)
 	return nil
 }
 
-// Reply forwards a user's spoken answer to the task sidecar's pending
+// Reply forwards a user's spoken answer to the task agent's pending
 // ask_user. Errors if no question is pending.
 func (m *TaskManager) Reply(answer string) error {
 	m.mu.Lock()
@@ -108,21 +92,15 @@ func (m *TaskManager) Reply(answer string) error {
 		return fmt.Errorf("no question pending")
 	}
 	id := m.state.AskUserID
-	client := m.client
+	ta := m.agent
 	m.mu.Unlock()
 
-	if client == nil {
-		return fmt.Errorf("no task client")
+	if ta == nil {
+		return fmt.Errorf("no task agent")
 	}
-	if err := client.Send(sidecar.AskUserReplyMsg{
-		Type:   sidecar.MsgTypeAskUserReply,
-		ID:     id,
-		Answer: answer,
-	}); err != nil {
-		return fmt.Errorf("send ask_user_reply: %w", err)
+	if err := ta.Reply(id, answer); err != nil {
+		return fmt.Errorf("reply: %w", err)
 	}
-	// Optimistically transition back to running; the sidecar will eventually
-	// confirm via subsequent events.
 	m.transition(TaskState{Kind: TaskStateRunning})
 	return nil
 }
@@ -130,7 +108,7 @@ func (m *TaskManager) Reply(answer string) error {
 // Cancel terminates any in-flight task. Safe to call when no task is running.
 func (m *TaskManager) Cancel() error {
 	m.mu.Lock()
-	if m.client == nil {
+	if m.agent == nil {
 		m.mu.Unlock()
 		return nil
 	}
@@ -147,15 +125,14 @@ func (m *TaskManager) Close() error {
 	return nil
 }
 
-// cancelLocked must be called with m.mu held.
 func (m *TaskManager) cancelLocked() {
 	if m.cancel != nil {
 		m.cancel()
 		m.cancel = nil
 	}
-	if m.client != nil {
-		_ = m.client.Close()
-		m.client = nil
+	if m.agent != nil {
+		_ = m.agent.Close()
+		m.agent = nil
 	}
 }
 
@@ -166,27 +143,47 @@ func (m *TaskManager) transition(s TaskState) {
 	select {
 	case m.events <- TaskEvent{State: s}:
 	default:
-		// Drop if consumer is slow; latest state is always available via Status().
 	}
 }
 
-func (m *TaskManager) readLoop(client *sidecar.Client) {
+const maxActivityEntries = 50
+
+func (m *TaskManager) transitionKeepActivity(s TaskState) {
+	m.mu.Lock()
+	s.ActivityLog = m.state.ActivityLog
+	m.state = s
+	m.mu.Unlock()
+	m.log.Info("task transition", "kind", s.Kind.String(), "activity_count", len(s.ActivityLog))
+	select {
+	case m.events <- TaskEvent{State: s}:
+	default:
+	}
+}
+
+func (m *TaskManager) readLoop(ta agent.TaskAgent) {
 	defer m.wg.Done()
-	for msg := range client.Events() {
-		switch v := msg.(type) {
-		case sidecar.AssistantTextMsg:
-			// Intermediate task narration; ignored in v1.
-			_ = v
-		case sidecar.AskUserMsg:
-			m.transition(TaskState{
+	for ev := range ta.Events() {
+		switch ev.Type {
+		case "activity":
+			if ev.Activity != nil {
+				m.log.Info("tool activity", "tool", ev.Activity.Tool, "path", ev.Activity.Path, "command", ev.Activity.Command, "ok", ev.Activity.Ok)
+				m.mu.Lock()
+				m.state.ActivityLog = append(m.state.ActivityLog, *ev.Activity)
+				if len(m.state.ActivityLog) > maxActivityEntries {
+					m.state.ActivityLog = m.state.ActivityLog[len(m.state.ActivityLog)-maxActivityEntries:]
+				}
+				m.mu.Unlock()
+			}
+		case "needs_input":
+			m.transitionKeepActivity(TaskState{
 				Kind:      TaskStateNeedsInput,
-				Question:  v.Question,
-				AskUserID: v.ID,
+				Question:  ev.Question,
+				AskUserID: ev.AskID,
 			})
-		case sidecar.DoneMsg:
-			m.transition(TaskState{Kind: TaskStateDone, Summary: v.Summary})
-		case sidecar.ErrorMsg:
-			m.transition(TaskState{Kind: TaskStateFailed, Message: v.Message})
+		case "done":
+			m.transitionKeepActivity(TaskState{Kind: TaskStateDone, Summary: ev.Summary})
+		case "failed":
+			m.transitionKeepActivity(TaskState{Kind: TaskStateFailed, Message: ev.Message})
 		}
 	}
 }

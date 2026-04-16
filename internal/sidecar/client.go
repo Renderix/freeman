@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
 )
@@ -41,6 +42,10 @@ func NewClientFromPipes(stdin io.Writer, stdout io.Reader) *Client {
 
 // Spawn launches a subprocess and wires its stdin/stdout to a new Client.
 // Example: Spawn(ctx, "bun", "run", "sidecar/stub.ts")
+//
+// The subprocess stderr is routed through a LinePrefixWriter so that its
+// output is clearly labelled "[sidecar:task] " in Freeman's stderr stream
+// and does not appear as bare, untagged lines mixed with Go slog output.
 func Spawn(ctx context.Context, name string, args ...string) (*Client, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	stdin, err := cmd.StdinPipe()
@@ -51,9 +56,9 @@ func Spawn(ctx context.Context, name string, args ...string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("stdout pipe: %w", err)
 	}
-	// cmd.Stderr is left as nil, which causes os/exec to use os.DevNull
-	// rather than inheriting the parent stderr. Task 10 will wire a
-	// prefixed writer so sidecar errors are visible in the CLI.
+	// Route task-sidecar stderr through a prefix writer so its log lines are
+	// clearly labelled and distinguishable from Freeman's own slog output.
+	cmd.Stderr = NewLinePrefixWriter(os.Stderr, "[sidecar:task]")
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start: %w", err)
 	}

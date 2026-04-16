@@ -74,7 +74,7 @@ jobs:
           files: artifacts/**/*
           body: |
             Freeman Streaming TTS Server Release
-            
+
             - High-performance Kokoro-82M engine
             - Real-time WebSocket streaming
             - Single-file standalone binaries

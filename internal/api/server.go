@@ -47,6 +47,11 @@ func NewServer(e *engine.TTSEngine, conf config.Config) *Server {
 
 // Start launches the Gin server.
 func (s *Server) Start(port int) error {
+	// Suppress Gin's verbose [GIN-debug] route-registration lines and the
+	// per-request access log that gin.Default() emits in development mode.
+	// Freeman uses its own slog-based structured logging; Gin's built-in
+	// text logger would otherwise interleave untagged lines with Go output.
+	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
 
 	r.GET("/", func(c *gin.Context) {
