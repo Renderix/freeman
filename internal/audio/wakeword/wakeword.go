@@ -3,7 +3,7 @@ package wakeword
 import (
 	"log/slog"
 
-	porcupine "github.com/Picovoice/porcupine/binding/go"
+	porcupine "github.com/Picovoice/porcupine/binding/go/v3"
 )
 
 type KeywordKind int
@@ -28,8 +28,6 @@ func (k KeywordKind) String() string {
 }
 
 type Config struct {
-	// AccessKey is reserved for future Porcupine v2+ API key support.
-	// The v1.9.x binding does not require an access key.
 	AccessKey     string
 	KeywordPaths  []string
 	Sensitivities []float32
@@ -45,6 +43,7 @@ type Detector struct {
 
 func NewDetector(cfg Config) (*Detector, error) {
 	p := porcupine.Porcupine{
+		AccessKey:     cfg.AccessKey,
 		KeywordPaths:  cfg.KeywordPaths,
 		Sensitivities: cfg.Sensitivities,
 	}
