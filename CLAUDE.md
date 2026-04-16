@@ -4,30 +4,30 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Freeman is a high-performance, real-time text-to-speech (TTS) streaming server using Kokoro-82M and ONNX Runtime. Go-based WebSocket server that converts text streams to audio with <100ms latency.
+Freeman is a voice-driven conversational coding assistant built in Go with Bun/TypeScript sidecars. It has two modes:
 
-## Build Commands
+1. **TTS Server** (`freeman start`): WebSocket streaming text-to-speech using Kokoro-82M via ONNX Runtime
+2. **Voice Call** (`freeman call`): Interactive voice assistant — mic capture → Whisper STT → conversational LLM → Kokoro TTS → speaker playback, with the ability to spawn background coding tasks
+
+## Build & Run
 
 ```bash
-# Build from source
+# Build
 go build -o freeman ./cmd/freeman
 
-# Download/verify dependencies
-go mod download
-go mod tidy
+# Dependencies
+go mod download && go mod tidy
+cd sidecar && bun install        # TypeScript sidecar deps
 
-# Setup models (required before first run)
-./scripts/setup_go_models.sh
-```
+# Model setup (required before first run)
+./scripts/setup_go_models.sh     # Kokoro ONNX models → ./models/
+./scripts/setup_whisper_model.sh # Whisper model → ./models/whisper/
 
-## Running the Server
-
-```bash
-# Start server (default port 17000)
+# Run TTS server
 ./freeman start --config config.yaml
 
-# With explicit flags
-./freeman start --models ./models --port 17000
+# Run voice call
+./freeman call --config config.yaml
 
 # Health check
 curl http://localhost:17000/health
@@ -35,30 +35,60 @@ curl http://localhost:17000/health
 
 ## Testing
 
-No test infrastructure exists yet. Tests should be added as `*_test.go` files alongside implementation.
-
 ```bash
-# When tests exist:
-go test ./...
-go test ./internal/buffer/...  # single package
+go test ./...                        # all tests
+go test ./internal/buffer/...        # single package
+go test -run TestSentenceBuffer ./internal/buffer/...  # single test
+cd sidecar && bun test               # TypeScript sidecar tests
 ```
+
+Live tests (`*_live_test.go`) require real audio hardware and are skipped in CI.
 
 ## Architecture
 
-```
-cmd/freeman/main.go          # Entry point, Cobra CLI (start, version commands)
-internal/
-  api/server.go              # Gin HTTP server, WebSocket handler at /ws/stream
-  config/config.go           # YAML config loading, defaults
-  engine/engine.go           # Sherpa-ONNX Kokoro TTS wrapper, WAV encoding
-  buffer/buffer.go           # Sentence accumulation, boundary detection, timeout flush
-  session/session.go         # Per-connection state, audio processing pipeline
-models/                      # ONNX model, voices.bin, tokens.txt, espeak-ng-data
-```
+Three-layer stack:
 
-**Data Flow:** WebSocket → Session → Buffer (sentence accumulation) → Engine (TTS) → WAV audio response
+### Layer 1: Audio I/O (`internal/audio/`)
+- `capture/`: Microphone input via malgo + ring buffer
+- `playback/`: Speaker output + Kokoro TTS engine integration
+- `vad/`: WebRTC Voice Activity Detection (speech boundary detection)
+- `stt/`: Whisper STT subprocess manager + HTTP client
+- `hotkey/`: TTY-mode hotkey detection (Enter key triggers recording)
+- Self-echo prevention: VAD + transcriber are muted during TTS playback via `Muter` interface
 
-## WebSocket Protocol
+### Layer 2: Conversation (`internal/conv/`)
+- `session.go`: Long-lived event loop routing between hotkey, transcriber, speaker, task manager, and conv-sidecar
+- Hosts `sidecar/conv-sidecar.ts` subprocess (pi-coding-agent LLM session)
+- Per turn: user speech → Whisper text → pack with task state → send to conv-sidecar → stream reply → sentence-chunk → TTS
+- Barge-in: if user speaks during TTS, playback cancels and pending audio is drained
+- `projectctx.go`: Extracts project context (README + manifests + dir listing, ~4KB cap) once at boot
+
+### Layer 3: Background Tasks (`internal/conv/taskmgr.go`)
+- Single-task supervisor: spawns `sidecar/sidecar.ts` per coding task
+- States: `none → running → {needs_input | done | failed} → none`
+- Task state injected as `[background task: ...]` prefix in next user_say prompt — LLM sees updates naturally
+- Conv-sidecar has tools: `start_task`, `reply_to_task`, `cancel_task`, `task_status`
+
+### Supporting Packages
+- `internal/engine/`: Kokoro TTS wrapper — `Generate()` returns WAV bytes (API), `GeneratePCM()` returns int16 samples (local playback)
+- `internal/buffer/`: SentenceBuffer — accumulates streaming text, detects sentence boundaries, handles abbreviations, long-sentence splitting (>150 chars), timeout flush (2s)
+- `internal/session/`: Per-WebSocket-connection state for the TTS API mode
+- `internal/sidecar/`: JSONL protocol types + subprocess client for Go↔TypeScript communication
+- `internal/agent/picoding/`: Adapter layer mapping ChatAgent/TaskAgent interfaces to pi-coding-agent sidecars; includes model resolution (`sonnet`/`opus` hints → full model IDs)
+- `internal/config/`: YAML config loading with defaults
+
+### TypeScript Sidecars (`sidecar/`)
+- `conv-sidecar.ts`: Long-lived conversation LLM (one per call). JSONL protocol: `init`, `user_say`, `tool_result`, `task_update`, `shutdown` → `ready`, `assistant_say`, `tool_call`, `turn_end`, `error`
+- `sidecar.ts`: Per-task coding agent (one-shot). JSONL protocol: `start`, `ask_user_reply`, `cancel` → `tool_activity`, `ask_user`, `done`, `error`
+- Both use `@mariozechner/pi-coding-agent` as the underlying LLM agent
+
+## Data Flow
+
+**TTS Server:** WebSocket → Session → SentenceBuffer → Engine (Kokoro) → WAV audio response
+
+**Voice Call:** Mic → VAD → Whisper STT → ConvSession → conv-sidecar (LLM) → SentenceBuffer → Engine (Kokoro PCM) → Speaker
+
+## WebSocket Protocol (TTS Server)
 
 Connect: `ws://localhost:17000/ws/stream`
 
@@ -69,15 +99,17 @@ Connect: `ws://localhost:17000/ws/stream`
 | `flush` | Force buffer flush |
 | `end` | Close stream |
 
-## Key Dependencies
-
-- `github.com/k2-fsa/sherpa-onnx-go` - ONNX TTS engine (Kokoro)
-- `github.com/gin-gonic/gin` - HTTP framework
-- `github.com/gorilla/websocket` - WebSocket support
-- `github.com/spf13/cobra` - CLI framework
-
 ## Configuration
 
-`config.yaml` controls: server port, model paths, default voice (`af_heart`), speed, sentence limits, buffer timeout (2.0s).
+`config.yaml` controls: server port, model paths, TTS defaults, conversation model settings, audio devices, STT/VAD parameters, hotkey mode, transcript logging.
 
-24 voices available: American female (af_*), American male (am_*), British female (bf_*), British male (bm_*).
+Key config sections: `server`, `model` (Kokoro paths), `tts` (voice/speed/buffer), `freeman.pm` (conversation model), `freeman.worker` (task agent models), `freeman.audio`, `freeman.stt` (Whisper + VAD), `freeman.hotkey`.
+
+## Key Dependencies
+
+- `github.com/k2-fsa/sherpa-onnx-go` — ONNX TTS engine (Kokoro-82M)
+- `github.com/gen2brain/malgo` — Cross-platform audio I/O (miniaudio)
+- `github.com/maxhawkins/go-webrtcvad` — Voice Activity Detection
+- `github.com/gin-gonic/gin` — HTTP/WebSocket server
+- `github.com/spf13/cobra` — CLI framework
+- `@mariozechner/pi-coding-agent` — TypeScript LLM agent (sidecar dependency)
