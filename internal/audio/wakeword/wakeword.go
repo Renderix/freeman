@@ -1,9 +1,11 @@
 package wakeword
 
 import (
+	"fmt"
 	"log/slog"
+	"path/filepath"
 
-	porcupine "github.com/Picovoice/porcupine/binding/go/v3"
+	ort "github.com/yalue/onnxruntime_go"
 )
 
 type KeywordKind int
@@ -27,35 +29,173 @@ func (k KeywordKind) String() string {
 	}
 }
 
+type KeywordConfig struct {
+	ModelPath string
+	Threshold float32
+}
+
 type Config struct {
-	AccessKey     string
-	KeywordPaths  []string
-	Sensitivities []float32
-	Logger        *slog.Logger
+	ModelsDir    string
+	MelModelFile string
+	EmbModelFile string
+	Keywords     [3]KeywordConfig
+	Logger       *slog.Logger
 }
 
 type Detector struct {
-	porc   porcupine.Porcupine
+	melSession *ort.AdvancedSession
+	embSession *ort.AdvancedSession
+	kwSessions [3]*ort.AdvancedSession
+	thresholds [3]float32
+
+	melInputTensor  *ort.Tensor[float32]
+	melOutputTensor *ort.Tensor[float32]
+	embInputTensor  *ort.Tensor[float32]
+	embOutputTensor *ort.Tensor[float32]
+	kwInputTensors  [3]*ort.Tensor[float32]
+	kwOutputTensors [3]*ort.Tensor[float32]
+
+	audioBuffer []float32
+	melBuffer   *ringFloat32
+	embBuffer   *ringFloat32
+	melCount    int
+	lastEmbMel  int
+
 	events chan KeywordKind
 	stopCh chan struct{}
 	log    *slog.Logger
 }
 
+const (
+	chunkSize    = 1280
+	melBins      = 32
+	melWindow    = 76
+	melStep      = 8
+	embSize      = 96
+	kwEmbCount   = 16
+	maxMelFrames = 970
+	maxEmbs      = 120
+)
+
+func int16ToFloat32(in []int16) []float32 {
+	out := make([]float32, len(in))
+	for i, v := range in {
+		out[i] = float32(v) / 32768.0
+	}
+	return out
+}
+
+type ringFloat32 struct {
+	data  []float32
+	cap_  int
+	count int
+}
+
+func newRingFloat32(capacity int) *ringFloat32 {
+	return &ringFloat32{
+		data: make([]float32, 0, capacity),
+		cap_: capacity,
+	}
+}
+
+func (r *ringFloat32) append(vals []float32) {
+	r.data = append(r.data, vals...)
+	r.count += len(vals)
+	if len(r.data) > r.cap_ {
+		r.data = r.data[len(r.data)-r.cap_:]
+	}
+}
+
+func (r *ringFloat32) lastN(n int) []float32 {
+	if len(r.data) < n {
+		out := make([]float32, len(r.data))
+		copy(out, r.data)
+		return out
+	}
+	out := make([]float32, n)
+	copy(out, r.data[len(r.data)-n:])
+	return out
+}
+
+func (r *ringFloat32) len() int {
+	return len(r.data)
+}
+
 func NewDetector(cfg Config) (*Detector, error) {
-	p := porcupine.Porcupine{
-		AccessKey:     cfg.AccessKey,
-		KeywordPaths:  cfg.KeywordPaths,
-		Sensitivities: cfg.Sensitivities,
+	if err := ort.InitializeEnvironment(); err != nil {
+		return nil, fmt.Errorf("onnx runtime init: %w", err)
 	}
-	if err := p.Init(); err != nil {
-		return nil, err
+
+	melPath := filepath.Join(cfg.ModelsDir, cfg.MelModelFile)
+	embPath := filepath.Join(cfg.ModelsDir, cfg.EmbModelFile)
+
+	melIn, err := ort.NewEmptyTensor[float32](ort.NewShape(1, chunkSize))
+	if err != nil {
+		return nil, fmt.Errorf("mel input tensor: %w", err)
 	}
-	return &Detector{
-		porc:   p,
-		events: make(chan KeywordKind, 4),
-		stopCh: make(chan struct{}),
-		log:    cfg.Logger,
-	}, nil
+	melOut, err := ort.NewEmptyTensor[float32](ort.NewShape(1, melBins))
+	if err != nil {
+		return nil, fmt.Errorf("mel output tensor: %w", err)
+	}
+	melSess, err := ort.NewAdvancedSession(melPath,
+		[]string{"input"}, []string{"output"},
+		[]ort.ArbitraryTensor{melIn}, []ort.ArbitraryTensor{melOut}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("mel session: %w", err)
+	}
+
+	embIn, err := ort.NewEmptyTensor[float32](ort.NewShape(1, melWindow, melBins, 1))
+	if err != nil {
+		return nil, fmt.Errorf("emb input tensor: %w", err)
+	}
+	embOut, err := ort.NewEmptyTensor[float32](ort.NewShape(1, embSize))
+	if err != nil {
+		return nil, fmt.Errorf("emb output tensor: %w", err)
+	}
+	embSess, err := ort.NewAdvancedSession(embPath,
+		[]string{"input"}, []string{"output"},
+		[]ort.ArbitraryTensor{embIn}, []ort.ArbitraryTensor{embOut}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("emb session: %w", err)
+	}
+
+	d := &Detector{
+		melSession:      melSess,
+		embSession:      embSess,
+		melInputTensor:  melIn,
+		melOutputTensor: melOut,
+		embInputTensor:  embIn,
+		embOutputTensor: embOut,
+		melBuffer:       newRingFloat32(maxMelFrames * melBins),
+		embBuffer:       newRingFloat32(maxEmbs * embSize),
+		events:          make(chan KeywordKind, 4),
+		stopCh:          make(chan struct{}),
+		log:             cfg.Logger,
+	}
+
+	for i, kw := range cfg.Keywords {
+		kwPath := filepath.Join(cfg.ModelsDir, kw.ModelPath)
+		kwIn, err := ort.NewEmptyTensor[float32](ort.NewShape(1, kwEmbCount*embSize))
+		if err != nil {
+			return nil, fmt.Errorf("kw[%d] input tensor: %w", i, err)
+		}
+		kwOut, err := ort.NewEmptyTensor[float32](ort.NewShape(1, 1))
+		if err != nil {
+			return nil, fmt.Errorf("kw[%d] output tensor: %w", i, err)
+		}
+		kwSess, err := ort.NewAdvancedSession(kwPath,
+			[]string{"input"}, []string{"output"},
+			[]ort.ArbitraryTensor{kwIn}, []ort.ArbitraryTensor{kwOut}, nil)
+		if err != nil {
+			return nil, fmt.Errorf("kw[%d] session (%s): %w", i, kwPath, err)
+		}
+		d.kwSessions[i] = kwSess
+		d.kwInputTensors[i] = kwIn
+		d.kwOutputTensors[i] = kwOut
+		d.thresholds[i] = kw.Threshold
+	}
+
+	return d, nil
 }
 
 func (d *Detector) Events() <-chan KeywordKind {
@@ -67,9 +207,6 @@ func (d *Detector) Run(frames <-chan []int16) {
 }
 
 func (d *Detector) readLoop(frames <-chan []int16) {
-	frameLen := porcupine.FrameLength
-	var buf []int16
-
 	for {
 		select {
 		case <-d.stopCh:
@@ -78,23 +215,56 @@ func (d *Detector) readLoop(frames <-chan []int16) {
 			if !ok {
 				return
 			}
-			buf = append(buf, frame...)
-			for len(buf) >= frameLen {
-				idx, err := d.porc.Process(buf[:frameLen])
-				if err != nil {
-					d.log.Error("porcupine process error", "err", err)
-					buf = buf[frameLen:]
-					continue
+			d.audioBuffer = append(d.audioBuffer, int16ToFloat32(frame)...)
+			for len(d.audioBuffer) >= chunkSize {
+				d.processChunk(d.audioBuffer[:chunkSize])
+				d.audioBuffer = d.audioBuffer[chunkSize:]
+			}
+		}
+	}
+}
+
+func (d *Detector) processChunk(chunk []float32) {
+	copy(d.melInputTensor.GetData(), chunk)
+	if err := d.melSession.Run(); err != nil {
+		d.log.Error("mel inference error", "err", err)
+		return
+	}
+	melOut := d.melOutputTensor.GetData()
+	d.melBuffer.append(melOut)
+	d.melCount++
+
+	melFrames := d.melBuffer.len() / melBins
+	for d.lastEmbMel+melWindow <= melFrames {
+		startIdx := d.lastEmbMel * melBins
+		window := d.melBuffer.data[startIdx : startIdx+melWindow*melBins]
+		copy(d.embInputTensor.GetData(), window)
+		if err := d.embSession.Run(); err != nil {
+			d.log.Error("emb inference error", "err", err)
+			d.lastEmbMel += melStep
+			continue
+		}
+		embOut := d.embOutputTensor.GetData()
+		d.embBuffer.append(embOut)
+		d.lastEmbMel += melStep
+	}
+
+	if d.embBuffer.len()/embSize >= kwEmbCount {
+		embData := d.embBuffer.lastN(kwEmbCount * embSize)
+		for i := 0; i < 3; i++ {
+			copy(d.kwInputTensors[i].GetData(), embData)
+			if err := d.kwSessions[i].Run(); err != nil {
+				d.log.Error("kw inference error", "kw", KeywordKind(i).String(), "err", err)
+				continue
+			}
+			score := d.kwOutputTensors[i].GetData()[0]
+			if score >= d.thresholds[i] {
+				kind := KeywordKind(i)
+				d.log.Info("keyword detected", "keyword", kind.String(), "score", score)
+				select {
+				case d.events <- kind:
+				default:
 				}
-				if idx >= 0 {
-					kind := KeywordKind(idx)
-					d.log.Info("keyword detected", "keyword", kind.String())
-					select {
-					case d.events <- kind:
-					default:
-					}
-				}
-				buf = buf[frameLen:]
 			}
 		}
 	}
@@ -102,5 +272,28 @@ func (d *Detector) readLoop(frames <-chan []int16) {
 
 func (d *Detector) Stop() {
 	close(d.stopCh)
-	d.porc.Delete()
+	if d.melSession != nil {
+		d.melSession.Destroy()
+	}
+	if d.embSession != nil {
+		d.embSession.Destroy()
+	}
+	for _, s := range d.kwSessions {
+		if s != nil {
+			s.Destroy()
+		}
+	}
+	d.melInputTensor.Destroy()
+	d.melOutputTensor.Destroy()
+	d.embInputTensor.Destroy()
+	d.embOutputTensor.Destroy()
+	for i := range d.kwInputTensors {
+		if d.kwInputTensors[i] != nil {
+			d.kwInputTensors[i].Destroy()
+		}
+		if d.kwOutputTensors[i] != nil {
+			d.kwOutputTensors[i].Destroy()
+		}
+	}
+	ort.DestroyEnvironment()
 }

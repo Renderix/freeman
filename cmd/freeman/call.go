@@ -145,23 +145,16 @@ func runCall(cmd *cobra.Command, args []string) error {
 	defer sp.Close()
 
 	// 8. Wakeword detector.
-	accessKey := os.Getenv(conf.Persona.AccessKeyEnv)
-	if accessKey == "" {
-		return fmt.Errorf("environment variable %s not set (Picovoice access key)", conf.Persona.AccessKeyEnv)
-	}
 	wkFrames := cap.Subscribe()
 	defer cap.Unsubscribe(wkFrames)
 	wk, err := wakeword.NewDetector(wakeword.Config{
-		AccessKey: accessKey,
-		KeywordPaths: []string{
-			conf.Persona.KeywordPaths.Wake,
-			conf.Persona.KeywordPaths.Mute,
-			conf.Persona.KeywordPaths.Stop,
-		},
-		Sensitivities: []float32{
-			conf.Persona.Sensitivities.Wake,
-			conf.Persona.Sensitivities.Mute,
-			conf.Persona.Sensitivities.Stop,
+		ModelsDir:    conf.Persona.Wakeword.ModelsDir,
+		MelModelFile: conf.Persona.Wakeword.Melspectrogram,
+		EmbModelFile: conf.Persona.Wakeword.Embedding,
+		Keywords: [3]wakeword.KeywordConfig{
+			{ModelPath: conf.Persona.Wakeword.Keywords.Wake.Model, Threshold: conf.Persona.Wakeword.Keywords.Wake.Threshold},
+			{ModelPath: conf.Persona.Wakeword.Keywords.Mute.Model, Threshold: conf.Persona.Wakeword.Keywords.Mute.Threshold},
+			{ModelPath: conf.Persona.Wakeword.Keywords.Stop.Model, Threshold: conf.Persona.Wakeword.Keywords.Stop.Threshold},
 		},
 		Logger: logger,
 	})
