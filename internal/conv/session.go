@@ -11,11 +11,15 @@ import (
 	"sync/atomic"
 
 	"github.com/Renderix/freeman/internal/agent"
+	"github.com/Renderix/freeman/internal/audio/wakeword"
+	"github.com/Renderix/freeman/internal/config"
 )
 
 // Transcriber is the subset of stt.Transcriber the conv layer needs.
 type Transcriber interface {
 	Utterances() <-chan string
+	Mute()
+	Unmute()
 	Stop()
 }
 
@@ -24,30 +28,24 @@ type Speaker interface {
 	Speak(ctx context.Context, text string) error
 }
 
-// Hotkey is the subset of hotkey.Hotkey the conv layer needs.
-type Hotkey interface {
-	Events() <-chan struct{}
-	Stop()
-}
-
 // Deps are the runtime dependencies injected into a Session.
 type Deps struct {
-	Transcriber   Transcriber
-	Speaker       Speaker
-	Hotkey        Hotkey
-	SpeechOnsets  <-chan struct{}
-	TaskManager   *TaskManager
-	ChatAgent     agent.ChatAgent
-	ModelResolver func(hint string) string
+	Transcriber    Transcriber
+	Speaker        Speaker
+	WakewordEvents <-chan wakeword.KeywordKind
+	SpeechOnsets   <-chan struct{}
+	TaskManager    *TaskManager
+	ChatAgent      agent.ChatAgent
+	ModelResolver  func(hint string) string
 
-	SystemPrompt string // chat system prompt (see DefaultSystemPrompt)
-	Model        string // e.g. "claude-haiku-4-5"
-	RepoRoot     string // used to read project context
-	Logger       *slog.Logger
+	Persona  config.PersonaConfig // persona config (name, greeting, traits, rules)
+	Model    string               // e.g. "claude-haiku-4-5"
+	RepoRoot string               // used to read project context
+	Logger   *slog.Logger
 }
 
 // DefaultSystemPrompt is the voice-tuned chat system prompt used when
-// Deps.SystemPrompt is empty.
+// no PersonaConfig name is set.
 const DefaultSystemPrompt = `You are Freeman, a voice assistant on a phone call with the user.
 
 ABSOLUTE RULES:
@@ -67,12 +65,37 @@ ON BACKGROUND TASKS:
 - Tasks run in parallel with the conversation; don't wait for them.
 `
 
+// buildSystemPrompt assembles a chat system prompt from PersonaConfig.
+func buildSystemPrompt(p config.PersonaConfig) string {
+	var b strings.Builder
+	b.WriteString("You are ")
+	b.WriteString(p.Name)
+	b.WriteString(", a voice assistant that helps with coding tasks.")
+	if len(p.Traits) > 0 {
+		b.WriteString(" Your personality: ")
+		b.WriteString(strings.Join(p.Traits, ", "))
+		b.WriteString(".")
+	}
+	if len(p.Rules) > 0 {
+		b.WriteString(" Rules you must follow: ")
+		for i, r := range p.Rules {
+			if i > 0 {
+				b.WriteString("; ")
+			}
+			b.WriteString(r)
+		}
+		b.WriteString(".")
+	}
+	return b.String()
+}
+
 // Session is the conv-layer event loop. It routes between mic,
 // ChatAgent, TaskManager, and speaker.
 type Session struct {
 	deps Deps
 	log  *slog.Logger
 
+	awake  bool
 	nextID atomic.Uint64
 
 	turnMu        sync.Mutex
@@ -103,9 +126,6 @@ func NewSession(_ context.Context, deps Deps) (*Session, error) {
 	if log == nil {
 		log = slog.Default()
 	}
-	if deps.SystemPrompt == "" {
-		deps.SystemPrompt = DefaultSystemPrompt
-	}
 
 	s := &Session{
 		deps:          deps,
@@ -128,9 +148,14 @@ func (s *Session) nextRequestID() string {
 
 // Run drives the call until ctx is canceled.
 func (s *Session) Run(ctx context.Context) error {
+	systemPrompt := buildSystemPrompt(s.deps.Persona)
+	if systemPrompt == "You are , a voice assistant that helps with coding tasks." {
+		systemPrompt = DefaultSystemPrompt
+	}
+
 	projectCtx := Read(s.deps.RepoRoot)
 	if err := s.deps.ChatAgent.Init(ctx, agent.ChatConfig{
-		SystemPrompt:   s.deps.SystemPrompt,
+		SystemPrompt:   systemPrompt,
 		ProjectContext: projectCtx,
 		Model:          s.deps.Model,
 	}); err != nil {
@@ -138,7 +163,7 @@ func (s *Session) Run(ctx context.Context) error {
 	}
 
 	utterances := s.deps.Transcriber.Utterances()
-	hotkeys := s.deps.Hotkey.Events()
+	wakeEvents := s.deps.WakewordEvents
 	taskEvents := s.deps.TaskManager.Events()
 	chatEvents := s.deps.ChatAgent.Events()
 	speechOnsets := s.deps.SpeechOnsets
@@ -149,22 +174,9 @@ func (s *Session) Run(ctx context.Context) error {
 	currentTaskState := s.deps.TaskManager.Status()
 
 	greet := func() {
-		if s.convBusy {
-			s.log.Info("conv busy — ignoring hotkey")
-			return
+		if s.deps.Persona.Greeting != "" {
+			s.speakSentence(s.deps.Persona.Greeting)
 		}
-		for {
-			select {
-			case _, ok := <-utterances:
-				if !ok {
-					utterances = nil
-				}
-				continue
-			default:
-			}
-			break
-		}
-		s.dispatchUserSay("<call started>", currentTaskState)
 	}
 
 	for {
@@ -177,13 +189,41 @@ func (s *Session) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 
-		case <-hotkeys:
-			s.log.Info("hotkey pressed")
-			greet()
+		case kind := <-wakeEvents:
+			switch kind {
+			case wakeword.KeywordWake:
+				s.log.Info("wake word detected")
+				if !s.awake {
+					s.awake = true
+					s.deps.Transcriber.Unmute()
+					greet()
+				}
+			case wakeword.KeywordMute:
+				s.log.Info("mute word detected")
+				if s.cancelSpeak != nil {
+					s.cancelSpeak()
+					s.cancelSpeak = nil
+				}
+				s.awake = false
+				s.convBusy = false
+				s.deps.Transcriber.Mute()
+				s.log.Info("muted — waiting for wake word")
+			case wakeword.KeywordStop:
+				s.log.Info("stop word detected — shutting down")
+				if s.cancelSpeak != nil {
+					s.cancelSpeak()
+				}
+				s.deps.TaskManager.Cancel()
+				s.deps.ChatAgent.Close()
+				return nil
+			}
 
 		case text, ok := <-utterances:
 			if !ok {
 				utterances = nil
+				continue
+			}
+			if !s.awake {
 				continue
 			}
 			s.log.Info("heard", "text", text)
