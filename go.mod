@@ -11,6 +11,7 @@ require (
 	github.com/k2-fsa/sherpa-onnx-go v1.12.22
 	github.com/maxhawkins/go-webrtcvad v0.0.0-20210121163624-be60036f3083
 	github.com/spf13/cobra v1.10.2
+	github.com/yalue/onnxruntime_go v1.27.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
