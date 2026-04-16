@@ -100,7 +100,7 @@ func (sb *SentenceBuffer) findSentenceEnd(text string) []int {
 		before := text[:punIdx]
 		words := strings.Fields(before)
 		if len(words) > 0 {
-			lastWord := strings.ToLower(strings.Trim(words[len(words)-1], " .!?;:"))
+			lastWord := strings.ToLower(strings.Trim(words[len(words)-1], ".!?;:"))
 			if sb.abbreviations[lastWord] {
 				continue // Skip this match, it's an abbreviation
 			}
