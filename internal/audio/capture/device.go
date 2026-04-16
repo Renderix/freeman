@@ -26,6 +26,8 @@ type Device struct {
 	dev       *malgo.Device
 	ring      *Ring
 	frames    chan []int16
+	subs      map[chan []int16]struct{}
+	subsMu    sync.RWMutex
 	stopOnce  sync.Once
 	stopCh    chan struct{}
 	frameSize int // samples per frame
@@ -53,6 +55,7 @@ func Open(actx *audio.Context, cfg Config) (*Device, error) {
 		cfg:       cfg,
 		ring:      NewRing(frameSize * 200), // ~4 s of mic audio
 		frames:    make(chan []int16, 50),
+		subs:      make(map[chan []int16]struct{}),
 		stopCh:    make(chan struct{}),
 		frameSize: frameSize,
 		log: func(msg string, kv ...any) {
@@ -137,13 +140,7 @@ func (d *Device) drain() {
 			frame := make([]int16, d.frameSize)
 			copy(frame, pending[:d.frameSize])
 			pending = pending[d.frameSize:]
-			select {
-			case d.frames <- frame:
-			default:
-				// consumer is lagging — ring already applied drop-oldest,
-				// so just drop this frame and log once in a while.
-				d.logLaggingDrop()
-			}
+			d.broadcast(frame)
 		}
 		if now := time.Now(); now.Sub(d.droppedT) > 5*time.Second {
 			dropped := d.ring.Dropped()
@@ -151,6 +148,38 @@ func (d *Device) drain() {
 				d.log("capture: dropped samples in last interval", "count", dropped)
 				d.droppedT = now
 			}
+		}
+	}
+}
+
+// Subscribe returns a buffered channel that receives a copy of every frame.
+func (d *Device) Subscribe() <-chan []int16 {
+	ch := make(chan []int16, 50)
+	d.subsMu.Lock()
+	d.subs[ch] = struct{}{}
+	d.subsMu.Unlock()
+	return ch
+}
+
+// Unsubscribe removes ch from the fan-out set and closes it.
+func (d *Device) Unsubscribe(ch <-chan []int16) {
+	writeCh := *(*chan []int16)(unsafe.Pointer(&ch))
+	d.subsMu.Lock()
+	delete(d.subs, writeCh)
+	d.subsMu.Unlock()
+	close(writeCh)
+}
+
+// broadcast delivers a copy of frame to every subscriber, dropping if full.
+func (d *Device) broadcast(frame []int16) {
+	d.subsMu.RLock()
+	defer d.subsMu.RUnlock()
+	for ch := range d.subs {
+		cp := make([]int16, len(frame))
+		copy(cp, frame)
+		select {
+		case ch <- cp:
+		default:
 		}
 	}
 }
