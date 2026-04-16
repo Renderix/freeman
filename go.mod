@@ -3,6 +3,7 @@ module github.com/Renderix/freeman
 go 1.25.6
 
 require (
+	github.com/Picovoice/porcupine/binding/go v1.9.2
 	github.com/gen2brain/malgo v0.11.24
 	github.com/gin-gonic/gin v1.11.0
 	github.com/google/uuid v1.6.0
