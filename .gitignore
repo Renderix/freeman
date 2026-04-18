@@ -46,3 +46,4 @@ Thumbs.db
 
 # User settings (local only)
 # ~/.config/freeman/ is used instead
+/lib/

@@ -22,8 +22,8 @@ cd sidecar && bun install        # TypeScript sidecar deps
 # Model setup (required before first run)
 ./scripts/setup_go_models.sh     # Kokoro ONNX models → ./models/
 ./scripts/setup_whisper_model.sh # Whisper model → ./models/whisper/
-./scripts/setup_wakeword_models.sh  # OpenWakeWord shared ONNX models → ./models/wakeword/
-./scripts/train_wakeword.sh         # Train custom keyword models (one-time, ~30-60 min)
+./scripts/setup_wakeword_models.sh  # OpenWakeWord shared + keyword ONNX → ./models/wakeword/
+                                    # (keyword models sourced from ../openwakeword-training/my_custom_model/)
 
 # Run TTS server
 ./freeman start --config config.yaml

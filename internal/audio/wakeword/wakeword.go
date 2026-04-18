@@ -3,10 +3,34 @@ package wakeword
 import (
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
+	"runtime"
 
 	ort "github.com/yalue/onnxruntime_go"
 )
+
+func resolveOnnxLib() (string, error) {
+	if p := os.Getenv("ONNXRUNTIME_LIB_PATH"); p != "" {
+		return p, nil
+	}
+	var candidates []string
+	switch runtime.GOOS {
+	case "darwin":
+		candidates = []string{"./lib/libonnxruntime.dylib", "/opt/homebrew/lib/libonnxruntime.dylib", "/usr/local/lib/libonnxruntime.dylib"}
+	case "linux":
+		candidates = []string{"./lib/libonnxruntime.so", "/usr/lib/libonnxruntime.so", "/usr/local/lib/libonnxruntime.so"}
+	case "windows":
+		candidates = []string{"./lib/onnxruntime.dll"}
+	}
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			abs, _ := filepath.Abs(c)
+			return abs, nil
+		}
+	}
+	return "", fmt.Errorf("onnxruntime shared library not found; set ONNXRUNTIME_LIB_PATH or run ./scripts/setup_wakeword_models.sh")
+}
 
 type KeywordKind int
 
@@ -67,14 +91,15 @@ type Detector struct {
 }
 
 const (
-	chunkSize    = 1280
-	melBins      = 32
-	melWindow    = 76
-	melStep      = 8
-	embSize      = 96
-	kwEmbCount   = 16
-	maxMelFrames = 970
-	maxEmbs      = 120
+	chunkSize         = 1280
+	melBins           = 32
+	melFramesPerChunk = 5
+	melWindow         = 76
+	melStep           = 8
+	embSize           = 96
+	kwEmbCount        = 16
+	maxMelFrames      = 970
+	maxEmbs           = 120
 )
 
 func int16ToFloat32(in []int16) []float32 {
@@ -122,8 +147,13 @@ func (r *ringFloat32) len() int {
 }
 
 func NewDetector(cfg Config) (*Detector, error) {
+	libPath, err := resolveOnnxLib()
+	if err != nil {
+		return nil, err
+	}
+	ort.SetSharedLibraryPath(libPath)
 	if err := ort.InitializeEnvironment(); err != nil {
-		return nil, fmt.Errorf("onnx runtime init: %w", err)
+		return nil, fmt.Errorf("onnx runtime init (%s): %w", libPath, err)
 	}
 
 	melPath := filepath.Join(cfg.ModelsDir, cfg.MelModelFile)
@@ -133,7 +163,7 @@ func NewDetector(cfg Config) (*Detector, error) {
 	if err != nil {
 		return nil, fmt.Errorf("mel input tensor: %w", err)
 	}
-	melOut, err := ort.NewEmptyTensor[float32](ort.NewShape(1, melBins))
+	melOut, err := ort.NewEmptyTensor[float32](ort.NewShape(1, 1, melFramesPerChunk, melBins))
 	if err != nil {
 		return nil, fmt.Errorf("mel output tensor: %w", err)
 	}
@@ -148,12 +178,12 @@ func NewDetector(cfg Config) (*Detector, error) {
 	if err != nil {
 		return nil, fmt.Errorf("emb input tensor: %w", err)
 	}
-	embOut, err := ort.NewEmptyTensor[float32](ort.NewShape(1, embSize))
+	embOut, err := ort.NewEmptyTensor[float32](ort.NewShape(1, 1, 1, embSize))
 	if err != nil {
 		return nil, fmt.Errorf("emb output tensor: %w", err)
 	}
 	embSess, err := ort.NewAdvancedSession(embPath,
-		[]string{"input"}, []string{"output"},
+		[]string{"input_1"}, []string{"conv2d_19"},
 		[]ort.ArbitraryTensor{embIn}, []ort.ArbitraryTensor{embOut}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("emb session: %w", err)
@@ -175,7 +205,7 @@ func NewDetector(cfg Config) (*Detector, error) {
 
 	for i, kw := range cfg.Keywords {
 		kwPath := filepath.Join(cfg.ModelsDir, kw.ModelPath)
-		kwIn, err := ort.NewEmptyTensor[float32](ort.NewShape(1, kwEmbCount*embSize))
+		kwIn, err := ort.NewEmptyTensor[float32](ort.NewShape(1, kwEmbCount, embSize))
 		if err != nil {
 			return nil, fmt.Errorf("kw[%d] input tensor: %w", i, err)
 		}
@@ -184,7 +214,7 @@ func NewDetector(cfg Config) (*Detector, error) {
 			return nil, fmt.Errorf("kw[%d] output tensor: %w", i, err)
 		}
 		kwSess, err := ort.NewAdvancedSession(kwPath,
-			[]string{"input"}, []string{"output"},
+			[]string{"onnx::Flatten_0"}, []string{"39"},
 			[]ort.ArbitraryTensor{kwIn}, []ort.ArbitraryTensor{kwOut}, nil)
 		if err != nil {
 			return nil, fmt.Errorf("kw[%d] session (%s): %w", i, kwPath, err)

@@ -60,8 +60,8 @@ persona:
         model: "horus.onnx"
         threshold: 0.5
       mute:
-        model: "mute.onnx"
+        model: "standby.onnx"
         threshold: 0.5
       stop:
-        model: "horus_stop.onnx"
+        model: "disengage.onnx"
         threshold: 0.7
