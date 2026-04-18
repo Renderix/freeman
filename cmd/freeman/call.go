@@ -188,7 +188,12 @@ func runCall(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("read persona prompt %s: %w", promptPath, err)
 	}
-	systemPrompt := strings.TrimSpace(string(promptBytes))
+	// Substitute {{name}} so persona.name in config.yaml drives the
+	// assistant's identity in the prompt. Keeps the config the single
+	// source of truth and avoids having to edit the prompt file when
+	// renaming the assistant.
+	systemPrompt := strings.ReplaceAll(string(promptBytes), "{{name}}", conf.Persona.Name)
+	systemPrompt = strings.TrimSpace(systemPrompt)
 	if systemPrompt == "" {
 		return fmt.Errorf("persona prompt %s is empty", promptPath)
 	}
