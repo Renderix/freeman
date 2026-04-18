@@ -85,6 +85,13 @@ type Detector struct {
 	melCount    int
 	lastEmbMel  int
 
+	// Monotonic chunk counter + per-keyword refractory gate. A single
+	// utterance produces high scores across every chunk the utterance's
+	// embeddings remain in the 16-wide rolling window (≈1s), so without
+	// a cooldown one "Horus" fires dozens of events.
+	totalChunks   int
+	cooldownUntil [3]int
+
 	events chan KeywordKind
 	stopCh chan struct{}
 	log    *slog.Logger
@@ -100,12 +107,22 @@ const (
 	kwEmbCount        = 16
 	maxMelFrames      = 970
 	maxEmbs           = 120
+
+	// Per-keyword refractory window after a detection. 25 chunks × 80ms =
+	// 2s, long enough to ride out the utterance's echo through the 16-wide
+	// embedding window and avoid repeat fires, short enough that the user
+	// can re-trigger quickly.
+	cooldownChunks = 25
 )
 
+// int16ToFloat32 casts PCM samples to float32 without scaling. The mel
+// model in OpenWakeWord was trained against raw int16 magnitudes (just
+// a dtype change, not [-1,1] normalisation), so scaling here shifts the
+// mel output by ~90 dB and silently kills keyword accuracy.
 func int16ToFloat32(in []int16) []float32 {
 	out := make([]float32, len(in))
 	for i, v := range in {
-		out[i] = float32(v) / 32768.0
+		out[i] = float32(v)
 	}
 	return out
 }
@@ -260,8 +277,15 @@ func (d *Detector) processChunk(chunk []float32) {
 		d.log.Error("mel inference error", "err", err)
 		return
 	}
+	// Apply OpenWakeWord's reference mel transform (mel/10 + 2) to bring
+	// the ONNX melspectrogram output into the range the embedding model
+	// was trained against. See openwakeword/utils.py:_get_melspectrogram.
 	melOut := d.melOutputTensor.GetData()
-	d.melBuffer.append(melOut)
+	normalized := make([]float32, len(melOut))
+	for i, v := range melOut {
+		normalized[i] = v/10.0 + 2.0
+	}
+	d.melBuffer.append(normalized)
 	d.melCount++
 
 	melFrames := d.melBuffer.len() / melBins
@@ -288,9 +312,13 @@ func (d *Detector) processChunk(chunk []float32) {
 				continue
 			}
 			score := d.kwOutputTensors[i].GetData()[0]
+			kind := KeywordKind(i)
 			if score >= d.thresholds[i] {
-				kind := KeywordKind(i)
+				if d.totalChunks < d.cooldownUntil[i] {
+					continue
+				}
 				d.log.Info("keyword detected", "keyword", kind.String(), "score", score)
+				d.cooldownUntil[i] = d.totalChunks + cooldownChunks
 				select {
 				case d.events <- kind:
 				default:
@@ -298,6 +326,8 @@ func (d *Detector) processChunk(chunk []float32) {
 			}
 		}
 	}
+
+	d.totalChunks++
 }
 
 func (d *Detector) Stop() {

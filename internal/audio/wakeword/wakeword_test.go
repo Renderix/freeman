@@ -38,19 +38,19 @@ func TestKeywordKindString(t *testing.T) {
 }
 
 func TestInt16ToFloat32(t *testing.T) {
+	// OpenWakeWord's mel model ingests raw int16 magnitudes cast to
+	// float32 (no [-1,1] normalisation). Scaling here would shift the
+	// mel output and kill keyword accuracy — verify we preserve values.
 	input := []int16{0, 16384, -16384, 32767, -32768}
 	got := int16ToFloat32(input)
-	if len(got) != 5 {
-		t.Fatalf("expected 5, got %d", len(got))
+	want := []float32{0, 16384, -16384, 32767, -32768}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d, got %d", len(want), len(got))
 	}
-	if got[0] != 0.0 {
-		t.Errorf("got[0] = %f, want 0.0", got[0])
-	}
-	if got[3] < 0.99 || got[3] > 1.01 {
-		t.Errorf("got[3] = %f, want ~1.0", got[3])
-	}
-	if got[4] < -1.01 || got[4] > -0.99 {
-		t.Errorf("got[4] = %f, want ~-1.0", got[4])
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("got[%d] = %f, want %f", i, got[i], w)
+		}
 	}
 }
 
