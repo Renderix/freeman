@@ -184,9 +184,19 @@ export function runConvSidecar(
       "\n\n## Project context (read once at boot)\n\n" +
       msg.project_context;
 
+    // IMPORTANT: agentsFilesOverride must return an empty array. Without
+    // it pi-coding-agent auto-discovers CLAUDE.md / AGENTS.md from the
+    // working directory and appends them to the system prompt as
+    // "Project Context". In a coding repo that file is a full markdown
+    // style guide for a coding assistant — the model treats it as
+    // authoritative and starts answering in bullets, bold, and emojis,
+    // which is the opposite of what a voice TTS reply needs. We already
+    // pass our own curated project context inline above, so we don't
+    // need the library's discovery.
     const loader = new DefaultResourceLoader({
       systemPromptOverride: () => fullSystemPrompt,
       appendSystemPromptOverride: () => [],
+      agentsFilesOverride: () => ({ agentsFiles: [] }),
     });
     await loader.reload();
 
