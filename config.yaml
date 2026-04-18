@@ -57,4 +57,4 @@ persona:
         threshold: 0.5
       stop:
         model: "disengage.onnx"
-        threshold: 0.7
+        threshold: 0.5

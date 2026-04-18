@@ -80,10 +80,13 @@ type Detector struct {
 	kwOutputTensors [3]*ort.Tensor[float32]
 
 	audioBuffer []float32
-	melBuffer   *ringFloat32
-	embBuffer   *ringFloat32
-	melCount    int
-	lastEmbMel  int
+	// lookback holds the last melLookbackSamples of audio so the next
+	// mel inference sees proper STFT context across the chunk boundary.
+	lookback   []float32
+	melBuffer  *ringFloat32
+	embBuffer  *ringFloat32
+	melCount   int
+	lastEmbMel int
 
 	// Monotonic chunk counter + per-keyword refractory gate. A single
 	// utterance produces high scores across every chunk the utterance's
@@ -98,15 +101,22 @@ type Detector struct {
 }
 
 const (
-	chunkSize         = 1280
-	melBins           = 32
-	melFramesPerChunk = 5
-	melWindow         = 76
-	melStep           = 8
-	embSize           = 96
-	kwEmbCount        = 16
-	maxMelFrames      = 970
-	maxEmbs           = 120
+	chunkSize = 1280
+	// melLookbackSamples is the pre-chunk context OpenWakeWord prepends
+	// before running the mel model, so STFT windows at chunk boundaries
+	// see the tail of the previous chunk. Without this we get 5 mel
+	// frames per 80ms chunk instead of 8 and the keyword classifier
+	// sees a ~2s history instead of the ~1.3s it was trained on.
+	melLookbackSamples = 480
+	melInputSamples    = chunkSize + melLookbackSamples // 1760
+	melBins            = 32
+	melFramesPerChunk  = 8
+	melWindow          = 76
+	melStep            = 8
+	embSize            = 96
+	kwEmbCount         = 16
+	maxMelFrames       = 970
+	maxEmbs            = 120
 
 	// Per-keyword refractory window after a detection. 25 chunks × 80ms =
 	// 2s, long enough to ride out the utterance's echo through the 16-wide
@@ -140,12 +150,21 @@ func newRingFloat32(capacity int) *ringFloat32 {
 	}
 }
 
-func (r *ringFloat32) append(vals []float32) {
+// append adds vals to the ring and returns the number of float32s dropped
+// from the front when the capacity is exceeded. Callers that hold
+// positional indices into the ring (e.g. lastEmbMel) must subtract the
+// returned count from their indices, otherwise they drift off the end
+// of the buffer once streaming exceeds the cap (~9.7s of audio at
+// 8 frames × 32 bins per 80ms chunk for the mel buffer).
+func (r *ringFloat32) append(vals []float32) int {
 	r.data = append(r.data, vals...)
 	r.count += len(vals)
 	if len(r.data) > r.cap_ {
-		r.data = r.data[len(r.data)-r.cap_:]
+		dropped := len(r.data) - r.cap_
+		r.data = r.data[dropped:]
+		return dropped
 	}
+	return 0
 }
 
 func (r *ringFloat32) lastN(n int) []float32 {
@@ -176,7 +195,7 @@ func NewDetector(cfg Config) (*Detector, error) {
 	melPath := filepath.Join(cfg.ModelsDir, cfg.MelModelFile)
 	embPath := filepath.Join(cfg.ModelsDir, cfg.EmbModelFile)
 
-	melIn, err := ort.NewEmptyTensor[float32](ort.NewShape(1, chunkSize))
+	melIn, err := ort.NewEmptyTensor[float32](ort.NewShape(1, melInputSamples))
 	if err != nil {
 		return nil, fmt.Errorf("mel input tensor: %w", err)
 	}
@@ -220,6 +239,25 @@ func NewDetector(cfg Config) (*Detector, error) {
 		log:             cfg.Logger,
 	}
 
+	// Prime the mel buffer with 76 frames of 1.0, matching OpenWakeWord's
+	// np.ones((76, 32)) initialisation. Without this, embeddings cannot
+	// be computed until ~1.2s of audio has been processed, so short
+	// utterances (wake words are 0.5-1s) never trigger at all.
+	primer := make([]float32, melWindow*melBins)
+	for i := range primer {
+		primer[i] = 1.0
+	}
+	d.melBuffer.append(primer)
+
+	// Prime the embedding buffer by pushing ~4s of random noise through
+	// the mel+embedding pipeline. Python's reference does the same at
+	// __init__ to ensure the keyword classifier always has 16 embeddings
+	// available on the very first call — otherwise the first second of
+	// real audio produces zero classifier runs and short wake words are
+	// missed. Using a stable pseudo-random sequence keeps this
+	// deterministic for tests.
+	primeEmbBuffer(d)
+
 	for i, kw := range cfg.Keywords {
 		kwPath := filepath.Join(cfg.ModelsDir, kw.ModelPath)
 		kwIn, err := ort.NewEmptyTensor[float32](ort.NewShape(1, kwEmbCount, embSize))
@@ -243,6 +281,36 @@ func NewDetector(cfg Config) (*Detector, error) {
 	}
 
 	return d, nil
+}
+
+// primeEmbBuffer runs 4 s of pseudo-random int16 audio through the
+// mel+embedding pipeline at init, populating embBuffer with ~120 seed
+// embeddings so the keyword classifier can fire from the very first
+// chunk of real audio. Deterministic seed so tests are reproducible.
+func primeEmbBuffer(d *Detector) {
+	const primerSeconds = 4
+	const totalSamples = 16000 * primerSeconds
+	// Cheap LCG so we don't pull in math/rand and so the sequence is
+	// stable across runs.
+	var state uint32 = 12345
+	next := func() float32 {
+		state = state*1664525 + 1013904223
+		// Scale to ~[-1000, 1000] as ints, then to float32 (no /32768
+		// scale, matching int16ToFloat32's semantics).
+		return float32(int32(state>>16)%2001 - 1000)
+	}
+	for pushed := 0; pushed < totalSamples; pushed += chunkSize {
+		chunk := make([]float32, chunkSize)
+		for i := range chunk {
+			chunk[i] = next()
+		}
+		d.updateFeatures(chunk)
+	}
+	// After priming, reset the mel buffer offset so the next real audio
+	// chunk starts computing embeddings fresh against the primed tail of
+	// the mel buffer. melCount is also reset so heartbeats elsewhere
+	// don't reflect warm-up work.
+	d.melCount = 0
 }
 
 func (d *Detector) Events() <-chan KeywordKind {
@@ -271,8 +339,34 @@ func (d *Detector) readLoop(frames <-chan []int16) {
 	}
 }
 
-func (d *Detector) processChunk(chunk []float32) {
-	copy(d.melInputTensor.GetData(), chunk)
+// updateFeatures runs the mel and embedding models for one 1280-sample
+// chunk and appends the resulting embeddings to embBuffer. Keyword
+// classification is handled separately in processChunk so that priming
+// (which shovels random audio through this path at startup) doesn't
+// emit events or logs.
+func (d *Detector) updateFeatures(chunk []float32) {
+	// Build a 1760-sample window: last 480 samples of previous audio
+	// (zeros on the very first chunk) followed by the new 1280 samples.
+	// This matches openwakeword/utils.py:_streaming_melspectrogram which
+	// feeds the mel model raw_data_buffer[-n_samples-160*3:].
+	melIn := d.melInputTensor.GetData()
+	if len(d.lookback) == melLookbackSamples {
+		copy(melIn, d.lookback)
+	} else {
+		// First chunk: pad leading samples with zeros.
+		for i := 0; i < melLookbackSamples; i++ {
+			melIn[i] = 0
+		}
+	}
+	copy(melIn[melLookbackSamples:], chunk)
+
+	// Stash the tail of this chunk for the next call's lookback.
+	if cap(d.lookback) < melLookbackSamples {
+		d.lookback = make([]float32, melLookbackSamples)
+	}
+	d.lookback = d.lookback[:melLookbackSamples]
+	copy(d.lookback, chunk[chunkSize-melLookbackSamples:])
+
 	if err := d.melSession.Run(); err != nil {
 		d.log.Error("mel inference error", "err", err)
 		return
@@ -285,7 +379,19 @@ func (d *Detector) processChunk(chunk []float32) {
 	for i, v := range melOut {
 		normalized[i] = v/10.0 + 2.0
 	}
-	d.melBuffer.append(normalized)
+	// If the ring had to drop old frames, shift lastEmbMel by the same
+	// number of frames so it still points at the correct position in the
+	// remaining buffer. Without this, once the ring wraps, the embedding
+	// loop never fires again and the keyword classifier keeps scoring
+	// the last stale 16 embeddings — exactly the bug that made live
+	// detection silently die after ~10s of audio.
+	dropped := d.melBuffer.append(normalized)
+	if dropped > 0 {
+		d.lastEmbMel -= dropped / melBins
+		if d.lastEmbMel < 0 {
+			d.lastEmbMel = 0
+		}
+	}
 	d.melCount++
 
 	melFrames := d.melBuffer.len() / melBins
@@ -302,6 +408,11 @@ func (d *Detector) processChunk(chunk []float32) {
 		d.embBuffer.append(embOut)
 		d.lastEmbMel += melStep
 	}
+}
+
+func (d *Detector) processChunk(chunk []float32) {
+	d.totalChunks++
+	d.updateFeatures(chunk)
 
 	if d.embBuffer.len()/embSize >= kwEmbCount {
 		embData := d.embBuffer.lastN(kwEmbCount * embSize)
@@ -313,6 +424,9 @@ func (d *Detector) processChunk(chunk []float32) {
 			}
 			score := d.kwOutputTensors[i].GetData()[0]
 			kind := KeywordKind(i)
+			if score >= 0.1 && score < d.thresholds[i] {
+				d.log.Info("keyword near-miss", "keyword", kind.String(), "score", score, "threshold", d.thresholds[i])
+			}
 			if score >= d.thresholds[i] {
 				if d.totalChunks < d.cooldownUntil[i] {
 					continue
@@ -326,8 +440,6 @@ func (d *Detector) processChunk(chunk []float32) {
 			}
 		}
 	}
-
-	d.totalChunks++
 }
 
 func (d *Detector) Stop() {
