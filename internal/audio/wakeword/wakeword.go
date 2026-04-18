@@ -195,6 +195,24 @@ func NewDetector(cfg Config) (*Detector, error) {
 	melPath := filepath.Join(cfg.ModelsDir, cfg.MelModelFile)
 	embPath := filepath.Join(cfg.ModelsDir, cfg.EmbModelFile)
 
+	// Single-thread ORT sessions: these models are tiny, parallelism
+	// overhead outweighs any gain, and leaving ORT on its default
+	// (intra_op = core count) means wakeword and Kokoro TTS fight for
+	// the same cores during synth, surfacing as choppy playback. One
+	// SessionOptions is shared by all five sessions so wakeword gets a
+	// bounded CPU budget separate from sherpa-onnx's pool.
+	sessOpts, err := ort.NewSessionOptions()
+	if err != nil {
+		return nil, fmt.Errorf("session options: %w", err)
+	}
+	defer sessOpts.Destroy()
+	if err := sessOpts.SetIntraOpNumThreads(1); err != nil {
+		return nil, fmt.Errorf("intra-op threads: %w", err)
+	}
+	if err := sessOpts.SetInterOpNumThreads(1); err != nil {
+		return nil, fmt.Errorf("inter-op threads: %w", err)
+	}
+
 	melIn, err := ort.NewEmptyTensor[float32](ort.NewShape(1, melInputSamples))
 	if err != nil {
 		return nil, fmt.Errorf("mel input tensor: %w", err)
@@ -205,7 +223,7 @@ func NewDetector(cfg Config) (*Detector, error) {
 	}
 	melSess, err := ort.NewAdvancedSession(melPath,
 		[]string{"input"}, []string{"output"},
-		[]ort.ArbitraryTensor{melIn}, []ort.ArbitraryTensor{melOut}, nil)
+		[]ort.ArbitraryTensor{melIn}, []ort.ArbitraryTensor{melOut}, sessOpts)
 	if err != nil {
 		return nil, fmt.Errorf("mel session: %w", err)
 	}
@@ -220,7 +238,7 @@ func NewDetector(cfg Config) (*Detector, error) {
 	}
 	embSess, err := ort.NewAdvancedSession(embPath,
 		[]string{"input_1"}, []string{"conv2d_19"},
-		[]ort.ArbitraryTensor{embIn}, []ort.ArbitraryTensor{embOut}, nil)
+		[]ort.ArbitraryTensor{embIn}, []ort.ArbitraryTensor{embOut}, sessOpts)
 	if err != nil {
 		return nil, fmt.Errorf("emb session: %w", err)
 	}
@@ -270,7 +288,7 @@ func NewDetector(cfg Config) (*Detector, error) {
 		}
 		kwSess, err := ort.NewAdvancedSession(kwPath,
 			[]string{"onnx::Flatten_0"}, []string{"39"},
-			[]ort.ArbitraryTensor{kwIn}, []ort.ArbitraryTensor{kwOut}, nil)
+			[]ort.ArbitraryTensor{kwIn}, []ort.ArbitraryTensor{kwOut}, sessOpts)
 		if err != nil {
 			return nil, fmt.Errorf("kw[%d] session (%s): %w", i, kwPath, err)
 		}

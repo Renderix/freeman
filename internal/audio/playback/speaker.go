@@ -11,6 +11,7 @@ package playback
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 	"unsafe"
@@ -143,7 +144,16 @@ func (s *Speaker) Flush(ctx context.Context) error {
 	if sink == nil {
 		return nil
 	}
-	return sink.drain(ctx)
+	err := sink.drain(ctx)
+	// Report underruns accumulated across this speaking batch so we can
+	// tell whether synth kept up with playback. Non-zero means the user
+	// heard one audible gap per count.
+	if ms, ok := sink.(*malgoSink); ok {
+		if n := ms.underruns(); n > 0 {
+			fmt.Fprintf(os.Stderr, "playback underruns this turn: %d (gaps in audio)\n", n)
+		}
+	}
+	return err
 }
 
 // Cancel clears all pending samples from the sink immediately. Used for
@@ -177,8 +187,10 @@ func (s *Speaker) Close() error {
 type malgoSink struct {
 	dev *malgo.Device
 
-	mu  sync.Mutex
-	buf []int16 // pending samples, consumed from the front by the callback
+	mu               sync.Mutex
+	buf              []int16 // pending samples, consumed from the front by the callback
+	hasWritten       bool    // true once any samples have ever been written
+	underrunsSinceFlush int  // write() calls that found buf empty after the first — each is an audible gap
 }
 
 func newMalgoSink(actx *audio.Context, sampleRate, channels int) (*malgoSink, error) {
@@ -216,9 +228,29 @@ func newMalgoSink(actx *audio.Context, sampleRate, channels int) (*malgoSink, er
 
 func (m *malgoSink) write(samples []int16) error {
 	m.mu.Lock()
+	// If this write finds the buffer empty AND we've written before,
+	// the audio callback must have drained everything and been padding
+	// with silence until we got here — i.e. the listener just heard a
+	// gap. Count it so Flush can report how choppy the utterance was.
+	if m.hasWritten && len(m.buf) == 0 {
+		m.underrunsSinceFlush++
+	}
 	m.buf = append(m.buf, samples...)
+	m.hasWritten = true
 	m.mu.Unlock()
 	return nil
+}
+
+// underruns returns and resets the count of write() calls that landed
+// in an already-empty buffer since the last call. Each one corresponds
+// to an audible gap in the preceding playback.
+func (m *malgoSink) underruns() int {
+	m.mu.Lock()
+	n := m.underrunsSinceFlush
+	m.underrunsSinceFlush = 0
+	m.hasWritten = false
+	m.mu.Unlock()
+	return n
 }
 
 func (m *malgoSink) drain(ctx context.Context) error {
