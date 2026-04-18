@@ -43,14 +43,7 @@ freeman:
 persona:
   name: "Horus"
   greeting: "I'm here"
-  traits:
-    - "concise"
-    - "technical"
-  rules:
-    - "No markdown in responses"
-    - "No bullet points"
-    - "No code fences"
-    - "Keep responses under 3 sentences"
+  prompt_file: ./prompts/freeman.md
   wakeword:
     models_dir: "./models/wakeword"
     melspectrogram: "melspectrogram.onnx"

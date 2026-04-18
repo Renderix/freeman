@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -131,14 +132,16 @@ func runCall(cmd *cobra.Command, args []string) error {
 	v.Mute()
 	tr.Mute()
 
-	// 7. Speaker, muting VAD + Transcriber together.
+	// 7. Speaker. The muter that gates VAD + Transcriber during TTS is
+	// owned by the conv.Session so it can span a whole multi-sentence
+	// assistant turn — this is what keeps inter-sentence playback gapless.
 	muter := &audio.MultiMuter{Muters: []audio.Muter{v, tr}}
 	sp, err := playback.Open(actx, playback.Config{
 		DeviceID: conf.Freeman.Audio.OutputDevice,
 		ChunkMs:  50,
 		Voice:    conf.TTS.DefaultVoice,
 		Speed:    conf.TTS.DefaultSpeed,
-	}, eng, muter)
+	}, eng)
 	if err != nil {
 		return fmt.Errorf("playback open: %w", err)
 	}
@@ -174,15 +177,33 @@ func runCall(cmd *cobra.Command, args []string) error {
 	taskMgr := conv.NewTaskManager(taskFactory, logger)
 	defer taskMgr.Close()
 
-	// 11. Conv session.
+	// 11. Load the system prompt from persona.prompt_file. Relative paths
+	// resolve against the repo root so editing prompts/freeman.md and
+	// restarting is enough to iterate on persona behaviour.
+	if conf.Persona.PromptFile == "" {
+		return fmt.Errorf("persona.prompt_file is required in config")
+	}
+	promptPath := resolve(conf.Persona.PromptFile)
+	promptBytes, err := os.ReadFile(promptPath)
+	if err != nil {
+		return fmt.Errorf("read persona prompt %s: %w", promptPath, err)
+	}
+	systemPrompt := strings.TrimSpace(string(promptBytes))
+	if systemPrompt == "" {
+		return fmt.Errorf("persona prompt %s is empty", promptPath)
+	}
+
+	// 12. Conv session.
 	convSession, err := conv.NewSession(ctx, conv.Deps{
 		Transcriber:    tr,
 		Speaker:        sp,
+		Muter:          muter,
 		WakewordEvents: wk.Events(),
 		SpeechOnsets:   v.SpeechOnsets(),
 		TaskManager:    taskMgr,
 		ChatAgent:      chatAgent,
 		ModelResolver:  taskFactory.ResolveModel,
+		SystemPrompt:   systemPrompt,
 		Persona:        conf.Persona,
 		RepoRoot:       repoRoot,
 		Model:          conf.Freeman.PM.Model,

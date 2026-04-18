@@ -96,11 +96,10 @@ type WakewordConfig struct {
 }
 
 type PersonaConfig struct {
-	Name     string         `yaml:"name"`
-	Greeting string         `yaml:"greeting"`
-	Traits   []string       `yaml:"traits"`
-	Rules    []string       `yaml:"rules"`
-	Wakeword WakewordConfig `yaml:"wakeword"`
+	Name       string         `yaml:"name"`
+	Greeting   string         `yaml:"greeting"`
+	PromptFile string         `yaml:"prompt_file"`
+	Wakeword   WakewordConfig `yaml:"wakeword"`
 }
 
 var DefaultConfig = Config{

@@ -1,5 +1,11 @@
-// Package playback drives Kokoro PCM to the system speakers via malgo and
-// manages self-echo suppression through the audio.Muter interface.
+// Package playback drives Kokoro PCM to the system speakers via malgo.
+// Speakers expose three operations to the conv layer: Speak queues a
+// sentence's samples into a long-lived sink without blocking on playback,
+// Flush waits for the sink to drain, and Cancel clears it immediately for
+// barge-in. Self-echo suppression (Mute/Unmute of VAD/STT) is owned by the
+// caller so mute state can span a whole multi-sentence assistant turn —
+// otherwise silence between sentences (Kokoro synth latency) surfaces as
+// audible breaks in the voice.
 package playback
 
 import (
@@ -24,20 +30,20 @@ type Synthesizer interface {
 type pcmSink interface {
 	write(samples []int16) error
 	drain(ctx context.Context) error
+	clear()
 	close() error
 }
 
-// Speaker implements call.Speaker.
+// Speaker implements conv.Speaker.
 type Speaker struct {
 	actx    *audio.Context
 	synth   Synthesizer
-	muter   audio.Muter
 	sink    pcmSink
 	chunkMs int
 	voice   string
 	speed   float64
 
-	mu sync.Mutex // serializes concurrent Speak calls
+	mu sync.Mutex // serializes concurrent Speak calls (Kokoro is not reentrant)
 }
 
 // Config selects the output device and the synthesis parameters.
@@ -48,10 +54,10 @@ type Config struct {
 	Speed    float64 // e.g. 1.0
 }
 
-// Open constructs a Speaker and opens an output device bound to the given synth.
-// muter is the audio.Muter that Speak will call around playback (typically the
-// stt.Transcriber). Pass &audio.NoopMuter{} if no transcription is wired.
-func Open(actx *audio.Context, cfg Config, synth Synthesizer, muter audio.Muter) (*Speaker, error) {
+// Open constructs a Speaker bound to the given synth. The output device is
+// opened lazily on the first Speak call so it inherits the engine's sample
+// rate without synthesizing a probe utterance.
+func Open(actx *audio.Context, cfg Config, synth Synthesizer) (*Speaker, error) {
 	if cfg.ChunkMs == 0 {
 		cfg.ChunkMs = 50
 	}
@@ -61,12 +67,9 @@ func Open(actx *audio.Context, cfg Config, synth Synthesizer, muter audio.Muter)
 	if cfg.Speed == 0 {
 		cfg.Speed = 1.0
 	}
-	// Device is opened lazily inside Speak so we inherit the engine's sample rate
-	// without synthesizing a probe utterance.
 	return &Speaker{
 		actx:    actx,
 		synth:   synth,
-		muter:   muter,
 		sink:    nil,
 		chunkMs: cfg.ChunkMs,
 		voice:   cfg.Voice,
@@ -74,19 +77,23 @@ func Open(actx *audio.Context, cfg Config, synth Synthesizer, muter audio.Muter)
 	}, nil
 }
 
-// Speak synthesizes and plays text. Blocks until playback drains or ctx cancels.
-// Muter is called as: Mute before (covering synth + playback so VAD can't fire
-// spurious barge-ins during synthesis), Unmute deferred.
+// Speak synthesizes text and writes samples into the sink. It does NOT wait
+// for the audio to play out — the sink keeps draining on its own while the
+// caller queues the next sentence. This is the core of gapless playback:
+// synth for sentence N+1 runs while N is still audible, so the audio
+// callback never sees an empty buffer mid-turn.
+//
+// ctx cancels synthesis only. Already-queued samples keep playing; use
+// Cancel to interrupt playback itself.
 func (s *Speaker) Speak(ctx context.Context, text string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Mute before synthesis so any VAD listeners are silenced during the
-	// synthesis window. Otherwise a SpeakEffect has already been dispatched
-	// by the session but VAD is still live, and mic noise during synth can
-	// cancel the speak before a single sample plays.
-	s.muter.Mute()
-	defer s.muter.Unmute()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 
 	samples, sr, err := s.synth.GeneratePCM(text, s.voice, s.speed)
 	if err != nil {
@@ -105,6 +112,9 @@ func (s *Speaker) Speak(ctx context.Context, text string) error {
 	}
 
 	chunkSize := sr * s.chunkMs / 1000
+	if chunkSize <= 0 {
+		chunkSize = len(samples)
+	}
 	for off := 0; off < len(samples); off += chunkSize {
 		select {
 		case <-ctx.Done():
@@ -119,7 +129,33 @@ func (s *Speaker) Speak(ctx context.Context, text string) error {
 			return err
 		}
 	}
-	return s.sink.drain(ctx)
+	return nil
+}
+
+// Flush blocks until the sink has drained (all queued samples played).
+// Callers use this at end-of-turn, before unmuting the mic, so the tail
+// of the last sentence isn't cut off and so self-echo can't leak in.
+// Returns ctx.Err() if canceled — leaves pending samples in place.
+func (s *Speaker) Flush(ctx context.Context) error {
+	s.mu.Lock()
+	sink := s.sink
+	s.mu.Unlock()
+	if sink == nil {
+		return nil
+	}
+	return sink.drain(ctx)
+}
+
+// Cancel clears all pending samples from the sink immediately. Used for
+// barge-in: stop mid-utterance so the user's interruption isn't talked
+// over. Safe to call when nothing is playing.
+func (s *Speaker) Cancel() {
+	s.mu.Lock()
+	sink := s.sink
+	s.mu.Unlock()
+	if sink != nil {
+		sink.clear()
+	}
 }
 
 // Close tears down the output device. Safe on shutdown paths.
@@ -205,6 +241,12 @@ func (m *malgoSink) drain(ctx context.Context) error {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+func (m *malgoSink) clear() {
+	m.mu.Lock()
+	m.buf = nil
+	m.mu.Unlock()
 }
 
 func (m *malgoSink) close() error {

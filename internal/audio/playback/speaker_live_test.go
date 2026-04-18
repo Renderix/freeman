@@ -32,7 +32,7 @@ func TestSpeaker_Live(t *testing.T) {
 	}
 	defer actx.Close()
 
-	sp, err := Open(actx, Config{Voice: "af_heart", Speed: 1.0}, staticSynth{}, &audio.NoopMuter{})
+	sp, err := Open(actx, Config{Voice: "af_heart", Speed: 1.0}, staticSynth{})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -42,5 +42,8 @@ func TestSpeaker_Live(t *testing.T) {
 	defer cancel()
 	if err := sp.Speak(ctx, "test"); err != nil {
 		t.Fatalf("Speak: %v", err)
+	}
+	if err := sp.Flush(ctx); err != nil {
+		t.Fatalf("Flush: %v", err)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 
 	"github.com/Renderix/freeman/internal/agent"
+	"github.com/Renderix/freeman/internal/audio"
 	"github.com/Renderix/freeman/internal/audio/wakeword"
 	"github.com/Renderix/freeman/internal/config"
 )
@@ -24,69 +25,32 @@ type Transcriber interface {
 }
 
 // Speaker is the subset of playback.Speaker the conv layer needs.
+// Speak queues a sentence's samples without blocking on playback; Flush
+// waits for the sink to drain (end-of-turn); Cancel clears pending samples
+// for barge-in. This three-method split is what enables gapless inter-
+// sentence playback — see speaker.go for the rationale.
 type Speaker interface {
 	Speak(ctx context.Context, text string) error
+	Flush(ctx context.Context) error
+	Cancel()
 }
 
 // Deps are the runtime dependencies injected into a Session.
 type Deps struct {
 	Transcriber    Transcriber
 	Speaker        Speaker
+	Muter          audio.Muter // gates VAD+STT during a speaking batch
 	WakewordEvents <-chan wakeword.KeywordKind
 	SpeechOnsets   <-chan struct{}
 	TaskManager    *TaskManager
 	ChatAgent      agent.ChatAgent
 	ModelResolver  func(hint string) string
 
-	Persona  config.PersonaConfig // persona config (name, greeting, traits, rules)
-	Model    string               // e.g. "claude-haiku-4-5"
-	RepoRoot string               // used to read project context
-	Logger   *slog.Logger
-}
-
-// DefaultSystemPrompt is the voice-tuned chat system prompt used when
-// no PersonaConfig name is set.
-const DefaultSystemPrompt = `You are Freeman, a voice assistant on a phone call with the user.
-
-ABSOLUTE RULES:
-- Replies are spoken aloud by text-to-speech. Never use markdown, asterisks, bullets, code fences, or line breaks.
-- Keep responses to one or two casual spoken sentences unless the user asks for detail.
-- The user can interrupt you mid-sentence. If they do, respond to the new thing without apologising.
-
-WHAT YOU CAN DO:
-- Chat about general topics using your knowledge.
-- Answer questions about this specific project using the project context provided below. If the project context doesn't have what you need, say so honestly — do not make things up.
-- Spawn a background task by calling the start_task tool. Use this whenever the user asks you to do anything that touches the codebase — building, fixing, investigating, checking git status, reading files, running commands, or answering questions about the code. This is your only way to interact with the repo. Only skip it for pure chat that needs no codebase access.
-- Forward the user's answer to a running task by calling reply_to_task. The task is asking when the background task state shows needs_input.
-- Cancel a task with cancel_task only when the user explicitly says to stop.
-
-ON BACKGROUND TASKS:
-- Each user turn includes a [background task: …] line at the top describing the task's current state. If the state has new information (the task finished, failed, or needs an answer), weave it naturally into your reply — don't ignore it. Do not mention the bracketed line literally.
-- Tasks run in parallel with the conversation; don't wait for them.
-`
-
-// buildSystemPrompt assembles a chat system prompt from PersonaConfig.
-func buildSystemPrompt(p config.PersonaConfig) string {
-	var b strings.Builder
-	b.WriteString("You are ")
-	b.WriteString(p.Name)
-	b.WriteString(", a voice assistant that helps with coding tasks.")
-	if len(p.Traits) > 0 {
-		b.WriteString(" Your personality: ")
-		b.WriteString(strings.Join(p.Traits, ", "))
-		b.WriteString(".")
-	}
-	if len(p.Rules) > 0 {
-		b.WriteString(" Rules you must follow: ")
-		for i, r := range p.Rules {
-			if i > 0 {
-				b.WriteString("; ")
-			}
-			b.WriteString(r)
-		}
-		b.WriteString(".")
-	}
-	return b.String()
+	SystemPrompt string               // full LLM system prompt, loaded from persona.prompt_file
+	Persona      config.PersonaConfig // persona config (name, greeting, wakeword)
+	Model        string               // e.g. "claude-haiku-4-5"
+	RepoRoot     string               // used to read project context
+	Logger       *slog.Logger
 }
 
 // Session is the conv-layer event loop. It routes between mic,
@@ -106,12 +70,26 @@ type Session struct {
 	speakDone     chan struct{}
 	speakRequests chan string
 
+	// speaking is true from the first sentence of an assistant batch until
+	// the sink has been flushed and the muter unmuted. Holding the muter
+	// across the whole batch prevents self-echo during the gapless inter-
+	// sentence playback introduced by the pipelined Speaker.
+	speaking    bool
+	flushing    bool
+	cancelFlush func()
+	flushDone   chan flushResult
+
 	convBusy          bool
 	pendingText       *string
 	pendingTaskUpdate *taskUpdatePayload
 	turnEnded         chan struct{}
 
 	assistantBuf *assistantBuffer
+}
+
+type flushResult struct {
+	err      error
+	canceled bool
 }
 
 type taskUpdatePayload struct {
@@ -127,12 +105,17 @@ func NewSession(_ context.Context, deps Deps) (*Session, error) {
 		log = slog.Default()
 	}
 
+	if deps.Muter == nil {
+		deps.Muter = &audio.NoopMuter{}
+	}
+
 	s := &Session{
 		deps:          deps,
 		log:           log,
 		speakDone:     make(chan struct{}, 1),
 		speakRequests: make(chan string, 16),
 		turnEnded:     make(chan struct{}, 1),
+		flushDone:     make(chan flushResult, 1),
 		assistantBuf:  &assistantBuffer{},
 	}
 	return s, nil
@@ -148,14 +131,13 @@ func (s *Session) nextRequestID() string {
 
 // Run drives the call until ctx is canceled.
 func (s *Session) Run(ctx context.Context) error {
-	systemPrompt := buildSystemPrompt(s.deps.Persona)
-	if systemPrompt == "You are , a voice assistant that helps with coding tasks." {
-		systemPrompt = DefaultSystemPrompt
+	if strings.TrimSpace(s.deps.SystemPrompt) == "" {
+		return fmt.Errorf("SystemPrompt is required (check persona.prompt_file)")
 	}
 
 	projectCtx := Read(s.deps.RepoRoot)
 	if err := s.deps.ChatAgent.Init(ctx, agent.ChatConfig{
-		SystemPrompt:   systemPrompt,
+		SystemPrompt:   s.deps.SystemPrompt,
 		ProjectContext: projectCtx,
 		Model:          s.deps.Model,
 	}); err != nil {
@@ -200,19 +182,14 @@ func (s *Session) Run(ctx context.Context) error {
 				}
 			case wakeword.KeywordMute:
 				s.log.Info("mute word detected")
-				if s.cancelSpeak != nil {
-					s.cancelSpeak()
-					s.cancelSpeak = nil
-				}
+				s.abortSpeakBatch()
 				s.awake = false
 				s.convBusy = false
 				s.deps.Transcriber.Mute()
 				s.log.Info("muted — waiting for wake word")
 			case wakeword.KeywordStop:
 				s.log.Info("stop word detected — shutting down")
-				if s.cancelSpeak != nil {
-					s.cancelSpeak()
-				}
+				s.abortSpeakBatch()
 				s.deps.TaskManager.Cancel()
 				s.deps.ChatAgent.Close()
 				return nil
@@ -279,19 +256,46 @@ func (s *Session) Run(ctx context.Context) error {
 				s.pendingText = nil
 				s.log.Info("conv free — dispatching pending", "text", text)
 				s.dispatchUserSay(text, currentTaskState)
+			} else {
+				// Assistant turn has fully ended and no new turn is queued.
+				// If the speak batch is also idle, this is the moment to
+				// flush the sink and unmute the mic.
+				s.maybeFinalizeSpeakBatch()
 			}
 
 		case text := <-speakCh:
+			// If a flush is mid-flight and a new sentence arrives, abort
+			// the flush and keep the muter held — we're still speaking.
+			if s.flushing {
+				s.cancelFlush()
+			}
+			if !s.speaking {
+				s.deps.Muter.Mute()
+				s.speaking = true
+			}
 			s.startSpeak(text)
 
 		case <-s.speakDone:
 			s.cancelSpeak = nil
+			s.maybeFinalizeSpeakBatch()
+
+		case res := <-s.flushDone:
+			s.flushing = false
+			s.cancelFlush = nil
+			if res.canceled {
+				// New sentence arrived mid-flush; batch continues and the
+				// muter stays held. A later speakDone will retry finalize.
+				continue
+			}
+			if s.speaking {
+				s.deps.Muter.Unmute()
+				s.speaking = false
+			}
 
 		case <-speechOnsets:
-			if s.cancelSpeak != nil {
+			if s.speaking {
 				s.log.Info("barge-in")
-				s.cancelSpeak()
-				s.cancelSpeak = nil
+				s.abortSpeakBatch()
 				s.markTurnCanceled()
 			}
 		}
@@ -349,8 +353,11 @@ func (s *Session) turnActive(id string) bool {
 	return id == s.currentTurnID && !s.turnCanceled
 }
 
-var sentenceTerminators = ".!?"
-
+// assistantBuffer accumulates streamed assistant text and splits it into
+// spoken sentences on newline boundaries. The system prompt instructs the
+// model to put each sentence on its own line, so a newline means "this
+// sentence is complete, start synthesizing." Anything after the last
+// newline is held until the next chunk or until drain() runs at turn end.
 type assistantBuffer struct {
 	mu  sync.Mutex
 	buf strings.Builder
@@ -362,23 +369,20 @@ func (b *assistantBuffer) appendAndFlush(chunk string) []string {
 	b.buf.WriteString(chunk)
 	full := b.buf.String()
 
+	idx := strings.LastIndexByte(full, '\n')
+	if idx < 0 {
+		return nil
+	}
+
 	var out []string
-	last := 0
-	for i := 0; i < len(full); i++ {
-		c := full[i]
-		if strings.IndexByte(sentenceTerminators, c) >= 0 {
-			seg := strings.TrimSpace(full[last : i+1])
-			if seg != "" {
-				out = append(out, seg)
-			}
-			last = i + 1
+	for _, line := range strings.Split(full[:idx], "\n") {
+		if seg := strings.TrimSpace(line); seg != "" {
+			out = append(out, seg)
 		}
 	}
-	if last > 0 {
-		rem := full[last:]
-		b.buf.Reset()
-		b.buf.WriteString(rem)
-	}
+	rem := full[idx+1:]
+	b.buf.Reset()
+	b.buf.WriteString(rem)
 	return out
 }
 
@@ -435,6 +439,63 @@ func (s *Session) startSpeak(text string) {
 		default:
 		}
 	}()
+}
+
+// maybeFinalizeSpeakBatch kicks off a sink drain + unmute if the assistant
+// batch is quiescent: currently speaking, no active Speak goroutine, no
+// queued sentences, no in-flight chat turn, and not already flushing.
+// Called from both speakDone and turnEnded handlers since either event
+// can be the one that makes the batch quiescent.
+func (s *Session) maybeFinalizeSpeakBatch() {
+	if !s.speaking || s.flushing {
+		return
+	}
+	if s.cancelSpeak != nil {
+		return
+	}
+	if len(s.speakRequests) > 0 {
+		return
+	}
+	if s.convBusy {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s.cancelFlush = cancel
+	s.flushing = true
+	go func() {
+		err := s.deps.Speaker.Flush(ctx)
+		canceled := ctx.Err() != nil
+		s.flushDone <- flushResult{err: err, canceled: canceled}
+	}()
+}
+
+// abortSpeakBatch immediately stops speaking: cancels any active Speak,
+// clears queued sentences, empties the audio sink, cancels any in-flight
+// flush, and unmutes the mic. Used for barge-in, mute, and stop.
+func (s *Session) abortSpeakBatch() {
+	if s.cancelSpeak != nil {
+		s.cancelSpeak()
+		s.cancelSpeak = nil
+	}
+	if s.flushing {
+		s.cancelFlush()
+		// flushDone will arrive later with canceled=true and is ignored
+		// because s.speaking is cleared below.
+	}
+	s.deps.Speaker.Cancel()
+	// Drain queued speak requests so the next batch starts clean.
+	for {
+		select {
+		case <-s.speakRequests:
+		default:
+			goto drained
+		}
+	}
+drained:
+	if s.speaking {
+		s.deps.Muter.Unmute()
+		s.speaking = false
+	}
 }
 
 func (s *Session) handleToolCall(ev agent.ChatEvent) {
