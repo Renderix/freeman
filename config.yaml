@@ -31,7 +31,7 @@ freeman:
     server_path: ""
     server_port: 0
     model_path: ./models/whisper/ggml-large-v3-turbo.bin
-    startup_timeout_ms: 10000
+    startup_timeout_ms: 30000
     vad:
       silence_ms: 800
       min_speech_ms: 300
@@ -43,6 +43,7 @@ freeman:
 persona:
   name: "Horus"
   greeting: "I'm here"
+  farewell: "Goodbye."
   prompt_file: ./prompts/freeman.md
   wakeword:
     models_dir: "./models/wakeword"

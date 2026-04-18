@@ -1,8 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -53,7 +53,14 @@ func runCall(cmd *cobra.Command, args []string) error {
 	ctx, cancel := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	logger := slog.New(slog.NewTextHandler(newlineWriter{os.Stderr}, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logFile, logPath, err := openSessionLog()
+	if err != nil {
+		return fmt.Errorf("open session log: %w", err)
+	}
+	defer logFile.Close()
+	fmt.Fprintf(os.Stderr, "freeman: logging to %s\n", logPath)
+
+	logger := slog.New(slog.NewTextHandler(logFile, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	// 1. Shared audio context (malgo).
 	actx, err := audio.New(logger)
@@ -222,17 +229,31 @@ func runCall(cmd *cobra.Command, args []string) error {
 	return convSession.Run(ctx)
 }
 
-// newlineWriter wraps an io.Writer and prepends "\r\n" before each write.
-// C libraries (sherpa-onnx, espeak-ng, malgo) occasionally write to fd 2
-// without a trailing newline, leaving the terminal cursor mid-line. The
-// carriage return resets the cursor to column 0 so slog lines aren't offset.
-type newlineWriter struct{ w io.Writer }
-
-func (n newlineWriter) Write(p []byte) (int, error) {
-	if _, err := n.w.Write([]byte("\r\n")); err != nil {
-		return 0, err
+// openSessionLog creates (if needed) ~/.freeman/logs/<date>/ and opens
+// a per-session log file inside it. The filename carries a time stamp
+// plus a 6-char hex id so two sessions started in the same second stay
+// distinct. Returns the open file and its path.
+func openSessionLog() (*os.File, string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, "", err
 	}
-	return n.w.Write(p)
+	now := time.Now()
+	dir := filepath.Join(home, ".freeman", "logs", now.Format("2006-01-02"))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, "", err
+	}
+	var id [3]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return nil, "", err
+	}
+	name := fmt.Sprintf("call-%s-%x.log", now.Format("150405"), id[:])
+	path := filepath.Join(dir, name)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return nil, "", err
+	}
+	return f, path, nil
 }
 
 // findRepoRoot locates the project root by walking up from the binary's

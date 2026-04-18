@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/Renderix/freeman/internal/agent"
 	"github.com/Renderix/freeman/internal/audio"
@@ -190,6 +191,21 @@ func (s *Session) Run(ctx context.Context) error {
 			case wakeword.KeywordStop:
 				s.log.Info("stop word detected — shutting down")
 				s.abortSpeakBatch()
+				// Play the configured farewell before tearing down so the
+				// user hears an acknowledgement of the stop keyword rather
+				// than the process vanishing silently. Speak synchronously
+				// via Speak + Flush — the queued-pipeline logic is overkill
+				// for a single one-shot utterance during shutdown.
+				if farewell := strings.TrimSpace(s.deps.Persona.Farewell); farewell != "" {
+					s.log.Info("speaking farewell", "text", farewell)
+					bye, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					if err := s.deps.Speaker.Speak(bye, farewell); err != nil {
+						s.log.Error("farewell speak", "err", err)
+					} else if err := s.deps.Speaker.Flush(bye); err != nil {
+						s.log.Error("farewell flush", "err", err)
+					}
+					cancel()
+				}
 				s.deps.TaskManager.Cancel()
 				s.deps.ChatAgent.Close()
 				return nil
