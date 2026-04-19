@@ -9,7 +9,7 @@ model:
   data_dir: "espeak-ng-data"
 
 tts:
-  default_voice: "af_heart"
+  default_voice: "bm_george"
   default_speed: 1.0
   max_sentence_chars: 150
   partial_sentence_timeout_sec: 2.0
@@ -33,7 +33,7 @@ freeman:
     model_path: ./models/whisper/ggml-large-v3-turbo.bin
     startup_timeout_ms: 30000
     vad:
-      silence_ms: 800
+      silence_ms: 500
       min_speech_ms: 300
       hangover_ms: 500
       aggressiveness: 2
@@ -47,7 +47,13 @@ persona:
   # rules: extra behavioural rules appended to the embedded system prompt.
   # Use this for things specific to your setup — tone, disallowed topics,
   # shorthand the assistant should recognise, etc.
-  rules: []
+  rules:
+    - "Talk like a close friend on a call — casual, warm, contractions, occasional 'yeah' / 'so' / 'actually'."
+    - "Never start with 'Based on', 'According to', 'I found', or any report-style preamble. Lead with the answer."
+    - "Show mild reactions when they fit — 'oh nice', 'hmm interesting', 'ugh that's annoying'. Sparingly, not every turn."
+    - "If you just looked something up, don't narrate it after. The acknowledgement was already spoken."
+    - "For factual lookups, give the answer first in plain words. One fact, maybe one follow-up. Don't list."
+    - "Avoid opening with 'Let me check' or similar filler phrases — those are already spoken by the system before you reply."
   wakeword:
     models_dir: "./models/wakeword"
     melspectrogram: "melspectrogram.onnx"

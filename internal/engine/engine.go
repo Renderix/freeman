@@ -8,40 +8,54 @@ import (
 	"github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
 )
 
+
 // TTSEngine wrapper for sherpa-onnx Kokoro TTS.
 type TTSEngine struct {
 	tts *sherpa_onnx.OfflineTts
 }
 
-// Voices maps voice IDs to descriptive names.
+// Voices lists the speakers available in the bundled Kokoro voices.bin.
+// The project currently ships with kokoro-en-v0_19, whose speaker IDs are
+// fixed and listed here alongside short descriptions. If you swap in a
+// different Kokoro build, update this map to match the new speaker order.
 var Voices = map[string]string{
-	"af_heart":    "American Female - Heart",
-	"af_alloy":    "American Female - Alloy",
-	"af_aoede":    "American Female - Aoede",
+	"af":          "American Female - Default (Bella+Sarah mix)",
 	"af_bella":    "American Female - Bella",
-	"af_jessica":  "American Female - Jessica",
-	"af_kore":     "American Female - Kore",
 	"af_nicole":   "American Female - Nicole",
-	"af_nova":     "American Female - Nova",
-	"af_river":    "American Female - River",
 	"af_sarah":    "American Female - Sarah",
 	"af_sky":      "American Female - Sky",
 	"am_adam":     "American Male - Adam",
-	"am_echo":     "American Male - Echo",
-	"am_eric":     "American Male - Eric",
-	"am_fenrir":   "American Male - Fenrir",
-	"am_liam":     "American Male - Liam",
 	"am_michael":  "American Male - Michael",
-	"am_onyx":     "American Male - Onyx",
-	"am_puck":     "American Male - Puck",
-	"bf_alice":    "British Female - Alice",
 	"bf_emma":     "British Female - Emma",
 	"bf_isabella": "British Female - Isabella",
-	"bf_lily":     "British Female - Lily",
-	"bm_daniel":   "British Male - Daniel",
-	"bm_fable":    "British Male - Fable",
 	"bm_george":   "British Male - George",
 	"bm_lewis":    "British Male - Lewis",
+}
+
+// voiceSpeakerIDs is the definitive voice-name → speaker-ID table for the
+// bundled kokoro-en-v0_19 model. Order matters and is set by sherpa-onnx's
+// voices.bin; do not sort.
+var voiceSpeakerIDs = map[string]int{
+	"af":          0,
+	"af_bella":    1,
+	"af_nicole":   2,
+	"af_sarah":    3,
+	"af_sky":      4,
+	"am_adam":     5,
+	"am_michael":  6,
+	"bf_emma":     7,
+	"bf_isabella": 8,
+	"bm_george":   9,
+	"bm_lewis":    10,
+}
+
+// speakerIDForVoice returns the speaker ID for a named voice, or 0 if
+// the name is unknown (falls back to the first voice).
+func speakerIDForVoice(voice string) int {
+	if id, ok := voiceSpeakerIDs[voice]; ok {
+		return id
+	}
+	return 0
 }
 
 // NewTTSEngine initializes the Sherpa-ONNX TTS engine.
@@ -72,16 +86,7 @@ func NewTTSEngine(modelPath, voicesPath, tokensPath, dataDir string) (*TTSEngine
 
 // Generate creates audio bytes for the given text and voice.
 func (e *TTSEngine) Generate(text, voice string, speed float64) ([]byte, error) {
-	// Find speaker ID for the voice
-	// Note: Sherpa-ONNX Kokoro uses speaker IDs.
-	// The mapping depends on how the model was exported.
-	// For now we'll assume the user provides a speaker ID or we map it.
-	// In the Python version, voices are filenames.
-
-	// TODO: Map string voice to speaker ID if needed.
-	// Most sherpa-onnx Kokoro models use speaker IDs 0-N.
-	// We'll use 0 as default for now if it's a simple setup.
-	speakerID := 0
+	speakerID := speakerIDForVoice(voice)
 
 	audio := e.tts.Generate(text, speakerID, float32(speed))
 	if audio.Samples == nil {
@@ -95,14 +100,14 @@ func (e *TTSEngine) Generate(text, voice string, speed float64) ([]byte, error) 
 // int16 samples plus the engine's native sample rate, skipping the WAV header.
 // Plan 2's playback.Speaker drives these samples straight into malgo.
 //
-// Semantics match Generate: the voice argument is reserved for future use but
-// currently ignored — both methods use speaker ID 0.
+// Semantics match Generate: the voice name is mapped to a Kokoro speaker
+// ID via the alphabetical order of voices in voices.bin. Unknown voice
+// names fall back to speaker ID 0.
 func (e *TTSEngine) GeneratePCM(text, voice string, speed float64) ([]int16, int, error) {
 	if e == nil || e.tts == nil {
 		return nil, 0, fmt.Errorf("engine not initialized")
 	}
-	speakerID := 0
-	_ = voice // parity with Generate; wire voice→speakerID mapping when Generate grows one
+	speakerID := speakerIDForVoice(voice)
 
 	audio := e.tts.Generate(text, speakerID, float32(speed))
 	if audio == nil || audio.Samples == nil || len(audio.Samples) == 0 {
