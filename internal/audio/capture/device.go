@@ -5,6 +5,7 @@ package capture
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -33,7 +34,17 @@ type Device struct {
 	frameSize int // samples per frame
 	droppedT  time.Time
 	log       func(msg string, kv ...any)
+	userMuted atomic.Bool
 }
+
+// SetUserMuted toggles a soft mute. While muted, every frame handed to
+// downstream subscribers is zero-filled, so wake-word, VAD, and STT all
+// go deaf together. The malgo device keeps running so turning mute off
+// is instant and doesn't re-prompt the OS for mic access.
+func (d *Device) SetUserMuted(muted bool) { d.userMuted.Store(muted) }
+
+// UserMuted reports the current soft-mute state.
+func (d *Device) UserMuted() bool { return d.userMuted.Load() }
 
 // Open initializes a capture device. It does not start it — call Start.
 func Open(actx *audio.Context, cfg Config) (*Device, error) {
@@ -171,12 +182,17 @@ func (d *Device) Unsubscribe(ch <-chan []int16) {
 }
 
 // broadcast delivers a copy of frame to every subscriber, dropping if full.
+// When user-muted, each copy is zero-filled so every consumer sees silence
+// without needing to know about the mute flag.
 func (d *Device) broadcast(frame []int16) {
+	muted := d.userMuted.Load()
 	d.subsMu.RLock()
 	defer d.subsMu.RUnlock()
 	for ch := range d.subs {
 		cp := make([]int16, len(frame))
-		copy(cp, frame)
+		if !muted {
+			copy(cp, frame)
+		}
 		select {
 		case ch <- cp:
 		default:

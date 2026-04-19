@@ -84,8 +84,10 @@ func runCall(cmd *cobra.Command, args []string) error {
 	// this call so `freeman call` in daemon mode exposes its log viewer
 	// without needing a second process. A bind failure (port in use, a
 	// separate `freeman logs` running, etc.) is logged and ignored — the
-	// voice loop must never fail because monitoring couldn't start.
-	startEmbeddedLogsViewer(logger)
+	// voice loop must never fail because monitoring couldn't start. The
+	// server also hosts /mic/* control endpoints; the capture device is
+	// wired in below once it's open.
+	logsSrv := startEmbeddedLogsViewer(logger)
 
 	// 1. Shared audio context (malgo).
 	actx, err := audio.New(logger)
@@ -137,6 +139,9 @@ func runCall(cmd *cobra.Command, args []string) error {
 	defer cap.Stop()
 	if err := cap.Start(); err != nil {
 		return fmt.Errorf("capture start: %w", err)
+	}
+	if logsSrv != nil {
+		logsSrv.SetMicController(cap)
 	}
 
 	// 5. VAD endpointing.
@@ -258,22 +263,22 @@ func runCall(cmd *cobra.Command, args []string) error {
 // exposes its log monitoring without a second process. A bind failure
 // is non-fatal — another `freeman logs` instance (or an older call) may
 // already own the port, and the voice loop must stay up regardless.
-func startEmbeddedLogsViewer(logger *slog.Logger) {
+func startEmbeddedLogsViewer(logger *slog.Logger) *logspkg.Server {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		logger.Warn("logs viewer: no home dir", "err", err)
-		return
+		return nil
 	}
 	root := filepath.Join(home, ".freeman", "logs")
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		logger.Warn("logs viewer: mkdir", "err", err)
-		return
+		return nil
 	}
 	srv := logspkg.NewServer(root)
 	ln, url, err := srv.Listen(17001)
 	if err != nil {
 		logger.Warn("logs viewer: bind failed — monitoring unavailable this session", "err", err)
-		return
+		return nil
 	}
 	logger.Info("logs viewer up", "url", url)
 	go func() {
@@ -281,6 +286,7 @@ func startEmbeddedLogsViewer(logger *slog.Logger) {
 			logger.Warn("logs viewer exited", "err", err)
 		}
 	}()
+	return srv
 }
 
 // openSessionLog creates (if needed) ~/.freeman/logs/<date>/ and opens

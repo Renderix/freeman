@@ -14,10 +14,20 @@ import (
 //go:embed web/index.html
 var webFS embed.FS
 
-// Server exposes a local HTML viewer for Freeman session logs.
+// MicController is the subset of the capture device the logs server
+// needs to expose a soft mic-mute toggle to the menu bar. Kept as an
+// interface so the logs package doesn't import internal/audio/capture.
+type MicController interface {
+	UserMuted() bool
+	SetUserMuted(bool)
+}
+
+// Server exposes a local HTML viewer for Freeman session logs, plus a
+// tiny control API (currently just mic mute) that the menu bar calls.
 type Server struct {
 	root string // e.g. ~/.freeman/logs
 	mux  *http.ServeMux
+	mic  MicController
 }
 
 // NewServer returns a configured log viewer. root is scanned for session
@@ -27,8 +37,16 @@ func NewServer(root string) *Server {
 	s.mux.HandleFunc("/", s.handleIndex)
 	s.mux.HandleFunc("/api/sessions", s.handleList)
 	s.mux.HandleFunc("/api/session", s.handleSession)
+	s.mux.HandleFunc("/mic/status", s.handleMicStatus)
+	s.mux.HandleFunc("/mic/mute", s.handleMicMute)
+	s.mux.HandleFunc("/mic/unmute", s.handleMicUnmute)
 	return s
 }
+
+// SetMicController wires in the capture device so /mic/* endpoints
+// start working. Safe to call before Serve; must be called before the
+// menu bar issues its first request or endpoints return 503.
+func (s *Server) SetMicController(m MicController) { s.mic = m }
 
 // Listen binds to 127.0.0.1:port. port=0 picks a free port. Returns the
 // listener and the resolved address so the caller can open a browser.
@@ -95,6 +113,35 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, sess)
+}
+
+func (s *Server) handleMicStatus(w http.ResponseWriter, r *http.Request) {
+	if s.mic == nil {
+		http.Error(w, "mic controller not wired", 503)
+		return
+	}
+	writeJSON(w, map[string]bool{"muted": s.mic.UserMuted()})
+}
+
+func (s *Server) handleMicMute(w http.ResponseWriter, r *http.Request) {
+	s.setMuted(w, r, true)
+}
+
+func (s *Server) handleMicUnmute(w http.ResponseWriter, r *http.Request) {
+	s.setMuted(w, r, false)
+}
+
+func (s *Server) setMuted(w http.ResponseWriter, r *http.Request, muted bool) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.mic == nil {
+		http.Error(w, "mic controller not wired", 503)
+		return
+	}
+	s.mic.SetUserMuted(muted)
+	writeJSON(w, map[string]bool{"muted": muted})
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

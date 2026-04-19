@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +16,8 @@ import (
 	"github.com/getlantern/systray"
 	"github.com/spf13/cobra"
 )
+
+const micControlBase = "http://127.0.0.1:17001"
 
 // menubarLabel is the launchd label for the menu-bar LaunchAgent.
 // Separate from the voice daemon so it can be started/stopped
@@ -220,12 +224,17 @@ func menubarKickstart() error {
 var (
 	itemEnable     *systray.MenuItem
 	itemDisable    *systray.MenuItem
+	itemMuteMic    *systray.MenuItem
+	itemUnmuteMic *systray.MenuItem
 	itemOpenViewer *systray.MenuItem
 	itemQuit       *systray.MenuItem
 
 	// lastRunning holds the most recent daemon-running state so we only
 	// update the systray title / item visibility when it changes.
 	lastRunning atomic.Bool
+	// lastMicMuted mirrors lastRunning for the mic mute toggle so we can
+	// skip redundant menu updates when polling.
+	lastMicMuted atomic.Int32 // -1 unknown, 0 live, 1 muted
 )
 
 func onMenubarReady() {
@@ -235,11 +244,17 @@ func onMenubarReady() {
 	itemEnable = systray.AddMenuItem("Enable", "Start the voice daemon")
 	itemDisable = systray.AddMenuItem("Disable", "Stop the voice daemon (say 'disengage' or click here)")
 	systray.AddSeparator()
+	itemMuteMic = systray.AddMenuItem("Mute mic", "Ignore mic input without stopping the daemon")
+	itemUnmuteMic = systray.AddMenuItem("Unmute mic", "Resume listening to the mic")
+	systray.AddSeparator()
 	itemOpenViewer = systray.AddMenuItem("Open Log Viewer", "http://127.0.0.1:17001/")
 	systray.AddSeparator()
 	itemQuit = systray.AddMenuItem("Quit Freeman", "Stop the voice daemon and exit the menu bar. Run `freeman install` or `freeman menubar start` to bring it back.")
 
 	itemDisable.Hide()
+	itemMuteMic.Hide()
+	itemUnmuteMic.Hide()
+	lastMicMuted.Store(-1)
 
 	go menubarStatePoller()
 	go menubarClickLoop()
@@ -256,10 +271,16 @@ func onMenubarExit() {
 func menubarStatePoller() {
 	tick := time.NewTicker(2 * time.Second)
 	defer tick.Stop()
-	applyState(voiceDaemonRunning())
+	refreshMenubarState()
 	for range tick.C {
-		applyState(voiceDaemonRunning())
+		refreshMenubarState()
 	}
+}
+
+func refreshMenubarState() {
+	running := voiceDaemonRunning()
+	applyState(running)
+	applyMicState(running)
 }
 
 func applyState(running bool) {
@@ -278,6 +299,43 @@ func applyState(running bool) {
 	}
 }
 
+// applyMicState shows the mute/unmute menu items based on the daemon's
+// reported state. When the daemon is down, both are hidden — there's
+// no mic to mute. When up, exactly one shows. "Unknown" state (daemon
+// up but /mic/status unreachable for any reason) falls back to hiding
+// both so we don't flash misleading UI.
+func applyMicState(daemonRunning bool) {
+	if !daemonRunning {
+		if lastMicMuted.Swap(-1) != -1 {
+			itemMuteMic.Hide()
+			itemUnmuteMic.Hide()
+		}
+		return
+	}
+	muted, ok := micMuted()
+	if !ok {
+		if lastMicMuted.Swap(-1) != -1 {
+			itemMuteMic.Hide()
+			itemUnmuteMic.Hide()
+		}
+		return
+	}
+	var next int32
+	if muted {
+		next = 1
+	}
+	if lastMicMuted.Swap(next) == next {
+		return
+	}
+	if muted {
+		itemMuteMic.Hide()
+		itemUnmuteMic.Show()
+	} else {
+		itemUnmuteMic.Hide()
+		itemMuteMic.Show()
+	}
+}
+
 func menubarClickLoop() {
 	for {
 		select {
@@ -292,6 +350,16 @@ func menubarClickLoop() {
 				fmt.Fprintf(os.Stderr, "menubar: disable failed: %v\n", err)
 			}
 			applyState(voiceDaemonRunning())
+		case <-itemMuteMic.ClickedCh:
+			if err := setMicMuted(true); err != nil {
+				fmt.Fprintf(os.Stderr, "menubar: mute mic failed: %v\n", err)
+			}
+			refreshMenubarState()
+		case <-itemUnmuteMic.ClickedCh:
+			if err := setMicMuted(false); err != nil {
+				fmt.Fprintf(os.Stderr, "menubar: unmute mic failed: %v\n", err)
+			}
+			refreshMenubarState()
 		case <-itemOpenViewer.ClickedCh:
 			_ = exec.Command("open", "http://127.0.0.1:17001/").Start()
 		case <-itemQuit.ClickedCh:
@@ -340,6 +408,46 @@ func voiceDaemonEnable() error {
 // stopped.
 func voiceDaemonDisable() error {
 	return exec.Command("launchctl", "kill", "TERM", gUIDomain()+"/"+daemonLabel).Run()
+}
+
+// micMuted polls the daemon's /mic/status endpoint. Returns (muted, ok).
+// ok=false means the daemon isn't serving the control API yet (still
+// starting up, or bound elsewhere) — the caller should treat it as
+// "unknown" rather than surfacing a specific state.
+func micMuted() (muted, ok bool) {
+	client := http.Client{Timeout: 400 * time.Millisecond}
+	resp, err := client.Get(micControlBase + "/mic/status")
+	if err != nil || resp.StatusCode != http.StatusOK {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		return false, false
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Muted bool `json:"muted"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return false, false
+	}
+	return body.Muted, true
+}
+
+func setMicMuted(muted bool) error {
+	path := "/mic/unmute"
+	if muted {
+		path = "/mic/mute"
+	}
+	client := http.Client{Timeout: 1 * time.Second}
+	resp, err := client.Post(micControlBase+path, "application/json", nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("status %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func init() {
