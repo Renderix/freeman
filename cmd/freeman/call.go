@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -20,6 +22,7 @@ import (
 	"github.com/Renderix/freeman/internal/config"
 	"github.com/Renderix/freeman/internal/conv"
 	"github.com/Renderix/freeman/internal/engine"
+	logspkg "github.com/Renderix/freeman/internal/logs"
 	"github.com/Renderix/freeman/internal/tools"
 	"github.com/spf13/cobra"
 )
@@ -37,6 +40,21 @@ once before first use.`,
 }
 
 func runCall(cmd *cobra.Command, args []string) error {
+	// Cap CPU parallelism to a single core-worth of Go scheduling and
+	// tell the runtime to keep its heap under ~1.3 GB. The remaining
+	// RAM budget goes to the Whisper model (which loads its own
+	// weights outside Go's heap). Keeps Freeman from running away with
+	// the machine when the user has other work to do.
+	runtime.GOMAXPROCS(1)
+	debug.SetMemoryLimit(1300 * 1024 * 1024)
+
+	// Single-instance lock. Prevents two voice daemons fighting over
+	// the mic when a user both runs `freeman call` manually and has
+	// the launchd agent loaded.
+	if err := acquireSingleInstance(); err != nil {
+		return err
+	}
+
 	repoRoot, err := findRepoRoot()
 	if err != nil {
 		return err
@@ -61,6 +79,13 @@ func runCall(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(os.Stderr, "freeman: logging to %s\n", logPath)
 
 	logger := slog.New(slog.NewTextHandler(logFile, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	// 0. Session log viewer. Runs on 127.0.0.1:17001 for the lifetime of
+	// this call so `freeman call` in daemon mode exposes its log viewer
+	// without needing a second process. A bind failure (port in use, a
+	// separate `freeman logs` running, etc.) is logged and ignored — the
+	// voice loop must never fail because monitoring couldn't start.
+	startEmbeddedLogsViewer(logger)
 
 	// 1. Shared audio context (malgo).
 	actx, err := audio.New(logger)
@@ -228,6 +253,36 @@ func runCall(cmd *cobra.Command, args []string) error {
 	return convSession.Run(ctx)
 }
 
+// startEmbeddedLogsViewer launches the session-log HTML viewer on a
+// goroutine so `freeman call` (especially under daemon supervision)
+// exposes its log monitoring without a second process. A bind failure
+// is non-fatal — another `freeman logs` instance (or an older call) may
+// already own the port, and the voice loop must stay up regardless.
+func startEmbeddedLogsViewer(logger *slog.Logger) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		logger.Warn("logs viewer: no home dir", "err", err)
+		return
+	}
+	root := filepath.Join(home, ".freeman", "logs")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		logger.Warn("logs viewer: mkdir", "err", err)
+		return
+	}
+	srv := logspkg.NewServer(root)
+	ln, url, err := srv.Listen(17001)
+	if err != nil {
+		logger.Warn("logs viewer: bind failed — monitoring unavailable this session", "err", err)
+		return
+	}
+	logger.Info("logs viewer up", "url", url)
+	go func() {
+		if err := srv.Serve(ln); err != nil {
+			logger.Warn("logs viewer exited", "err", err)
+		}
+	}()
+}
+
 // openSessionLog creates (if needed) ~/.freeman/logs/<date>/ and opens
 // a per-session log file inside it. The filename carries a time stamp
 // plus a 6-char hex id so two sessions started in the same second stay
@@ -257,33 +312,20 @@ func openSessionLog() (*os.File, string, error) {
 
 // findRepoRoot locates the project root by walking up from the binary's
 // directory (so it works regardless of cwd), then falls back to cwd.
+// findRepoRoot returns the directory freeman resolves relative paths
+// (config.yaml, models/, tools/, sidecar/) against. This is the
+// directory containing the binary after symlink resolution — so the
+// same code works for a dev checkout (binary alongside go.mod) and for
+// an installed layout at ~/.freeman/ (binary alongside config +
+// symlinked asset dirs).
 func findRepoRoot() (string, error) {
 	exe, err := os.Executable()
-	if err == nil {
-		exe, _ = filepath.EvalSymlinks(exe)
-		if root, err := walkUpForGoMod(filepath.Dir(exe)); err == nil {
-			return root, nil
-		}
+	if err != nil {
+		return "", fmt.Errorf("resolve executable path: %w", err)
 	}
-	if root, err := walkUpForGoMod("."); err == nil {
-		return root, nil
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
 	}
-	return "", fmt.Errorf("go.mod not found (checked binary dir and cwd)")
+	return filepath.Dir(exe), nil
 }
 
-func walkUpForGoMod(start string) (string, error) {
-	dir, err := filepath.Abs(start)
-	if err != nil {
-		return "", err
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir, nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", fmt.Errorf("go.mod not found")
-		}
-		dir = parent
-	}
-}

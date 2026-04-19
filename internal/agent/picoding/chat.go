@@ -39,6 +39,10 @@ func NewChatAgent(repoRoot string) *ChatAgent {
 func (a *ChatAgent) Init(ctx context.Context, cfg agent.ChatConfig) error {
 	scriptPath := filepath.Join(a.repoRoot, "sidecar", "conv-sidecar.ts")
 	a.cmd = exec.CommandContext(ctx, "bun", "run", scriptPath)
+	// Keep the sidecar's V8 heap on a short leash. Bun defaults to ~1.5 GB
+	// which is way more than the conversation agent needs, and that
+	// counts against our whole-process RAM budget.
+	a.cmd.Env = append(os.Environ(), "NODE_OPTIONS=--max-old-space-size=384")
 	var err error
 	a.stdin, err = a.cmd.StdinPipe()
 	if err != nil {

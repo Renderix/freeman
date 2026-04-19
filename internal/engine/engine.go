@@ -68,7 +68,11 @@ func NewTTSEngine(modelPath, voicesPath, tokensPath, dataDir string) (*TTSEngine
 			DataDir:     dataDir,
 			LengthScale: 1.0,
 		},
-		NumThreads: 4,
+		// Single-thread sherpa-onnx so Kokoro doesn't spawn a thread
+		// pool and blow past the whole-process CPU budget. Kokoro is
+		// fast enough on M-series single-threaded; higher counts gave
+		// <10% speedup at real-time load levels in testing.
+		NumThreads: 1,
 		Debug:      0,
 	}
 

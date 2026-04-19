@@ -14,16 +14,38 @@ func resolveOnnxLib() (string, error) {
 	if p := os.Getenv("ONNXRUNTIME_LIB_PATH"); p != "" {
 		return p, nil
 	}
-	var candidates []string
+	libName := "libonnxruntime.dylib"
+	switch runtime.GOOS {
+	case "linux":
+		libName = "libonnxruntime.so"
+	case "windows":
+		libName = "onnxruntime.dll"
+	}
+	// 1. Next to the binary (after symlink resolution). This handles
+	// both a dev checkout (binary at <repo>/freeman, lib at <repo>/lib)
+	// and an installed layout (binary at ~/.freeman/freeman, lib at
+	// ~/.freeman/lib either real or symlinked from the source repo).
+	if exe, err := os.Executable(); err == nil {
+		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = resolved
+		}
+		c := filepath.Join(filepath.Dir(exe), "lib", libName)
+		if _, err := os.Stat(c); err == nil {
+			return c, nil
+		}
+	}
+	// 2. Traditional cwd-relative + system paths, for backwards compat
+	// and for users who put the dylib in a Homebrew/system location.
+	var fallbacks []string
 	switch runtime.GOOS {
 	case "darwin":
-		candidates = []string{"./lib/libonnxruntime.dylib", "/opt/homebrew/lib/libonnxruntime.dylib", "/usr/local/lib/libonnxruntime.dylib"}
+		fallbacks = []string{"./lib/libonnxruntime.dylib", "/opt/homebrew/lib/libonnxruntime.dylib", "/usr/local/lib/libonnxruntime.dylib"}
 	case "linux":
-		candidates = []string{"./lib/libonnxruntime.so", "/usr/lib/libonnxruntime.so", "/usr/local/lib/libonnxruntime.so"}
+		fallbacks = []string{"./lib/libonnxruntime.so", "/usr/lib/libonnxruntime.so", "/usr/local/lib/libonnxruntime.so"}
 	case "windows":
-		candidates = []string{"./lib/onnxruntime.dll"}
+		fallbacks = []string{"./lib/onnxruntime.dll"}
 	}
-	for _, c := range candidates {
+	for _, c := range fallbacks {
 		if _, err := os.Stat(c); err == nil {
 			abs, _ := filepath.Abs(c)
 			return abs, nil

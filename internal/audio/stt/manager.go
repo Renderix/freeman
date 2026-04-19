@@ -58,7 +58,11 @@ func (m *Manager) Start(ctx context.Context) error {
 		m.cfg.Port = p
 	}
 	if m.cfg.Threads == 0 {
-		m.cfg.Threads = 4
+		// Default to 1 so the voice loop doesn't burn extra cores on
+		// Whisper inference. Real-time transcription of short user
+		// utterances is fine single-threaded on M-series; 4 threads
+		// was optimising for cold-start warm-up time, not steady state.
+		m.cfg.Threads = 1
 	}
 	if m.cfg.StartupTimeoutMs == 0 {
 		m.cfg.StartupTimeoutMs = 10000
@@ -107,13 +111,23 @@ func (m *Manager) killLocked() error {
 		return nil
 	}
 	m.stopped = true
-	_ = m.cmd.Process.Signal(syscall.SIGTERM)
+	// Signal the whole process group (whisper-server was started with
+	// Setpgid). A plain Process.Signal goes to the leader only; if the
+	// child ever spawns workers we'd leak them as orphans with PPID=1.
+	// syscall.Kill(-pgid, ...) broadcasts to the group.
+	pid := m.cmd.Process.Pid
+	if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil {
+		// Group kill can fail if the leader died already. Fall back to
+		// a single-process signal so we still attempt cleanup.
+		_ = m.cmd.Process.Signal(syscall.SIGTERM)
+	}
 	done := make(chan error, 1)
 	go func() { done <- m.cmd.Wait() }()
 	select {
 	case <-done:
 		return nil
 	case <-time.After(2 * time.Second):
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
 		_ = m.cmd.Process.Kill()
 		<-done
 		return nil
