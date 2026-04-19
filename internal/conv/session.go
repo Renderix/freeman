@@ -47,11 +47,10 @@ type Deps struct {
 	ChatAgent      agent.ChatAgent
 	ModelResolver  func(hint string) string
 
-	SystemPrompt string               // full LLM system prompt, loaded from persona.prompt_file
-	Persona      config.PersonaConfig // persona config (name, greeting, wakeword)
-	Model        string               // e.g. "claude-haiku-4-5"
-	RepoRoot     string               // used to read project context
-	Logger       *slog.Logger
+	Persona  config.PersonaConfig // persona config drives name, greeting, rules, wakeword
+	Model    string               // e.g. "claude-haiku-4-5"
+	RepoRoot string               // used to read project context
+	Logger   *slog.Logger
 }
 
 // Session is the conv-layer event loop. It routes between mic,
@@ -132,13 +131,11 @@ func (s *Session) nextRequestID() string {
 
 // Run drives the call until ctx is canceled.
 func (s *Session) Run(ctx context.Context) error {
-	if strings.TrimSpace(s.deps.SystemPrompt) == "" {
-		return fmt.Errorf("SystemPrompt is required (check persona.prompt_file)")
-	}
+	systemPrompt := BuildSystemPrompt(s.deps.Persona)
 
 	projectCtx := Read(s.deps.RepoRoot)
 	if err := s.deps.ChatAgent.Init(ctx, agent.ChatConfig{
-		SystemPrompt:   s.deps.SystemPrompt,
+		SystemPrompt:   systemPrompt,
 		ProjectContext: projectCtx,
 		Model:          s.deps.Model,
 	}); err != nil {

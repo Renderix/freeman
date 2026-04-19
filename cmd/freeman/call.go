@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
@@ -184,28 +183,9 @@ func runCall(cmd *cobra.Command, args []string) error {
 	taskMgr := conv.NewTaskManager(taskFactory, logger)
 	defer taskMgr.Close()
 
-	// 11. Load the system prompt from persona.prompt_file. Relative paths
-	// resolve against the repo root so editing prompts/freeman.md and
-	// restarting is enough to iterate on persona behaviour.
-	if conf.Persona.PromptFile == "" {
-		return fmt.Errorf("persona.prompt_file is required in config")
-	}
-	promptPath := resolve(conf.Persona.PromptFile)
-	promptBytes, err := os.ReadFile(promptPath)
-	if err != nil {
-		return fmt.Errorf("read persona prompt %s: %w", promptPath, err)
-	}
-	// Substitute {{name}} so persona.name in config.yaml drives the
-	// assistant's identity in the prompt. Keeps the config the single
-	// source of truth and avoids having to edit the prompt file when
-	// renaming the assistant.
-	systemPrompt := strings.ReplaceAll(string(promptBytes), "{{name}}", conf.Persona.Name)
-	systemPrompt = strings.TrimSpace(systemPrompt)
-	if systemPrompt == "" {
-		return fmt.Errorf("persona prompt %s is empty", promptPath)
-	}
-
-	// 12. Conv session.
+	// 11. Conv session. The system prompt is embedded in the conv
+	// package and built from Persona at Run time, so nothing needs
+	// loading here.
 	convSession, err := conv.NewSession(ctx, conv.Deps{
 		Transcriber:    tr,
 		Speaker:        sp,
@@ -215,7 +195,6 @@ func runCall(cmd *cobra.Command, args []string) error {
 		TaskManager:    taskMgr,
 		ChatAgent:      chatAgent,
 		ModelResolver:  taskFactory.ResolveModel,
-		SystemPrompt:   systemPrompt,
 		Persona:        conf.Persona,
 		RepoRoot:       repoRoot,
 		Model:          conf.Freeman.PM.Model,

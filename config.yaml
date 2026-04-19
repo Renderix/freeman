@@ -42,9 +42,12 @@ freeman:
 
 persona:
   name: "Horus"
-  greeting: "I'm here"
+  greeting: "Hi! What can I do for you?"
   farewell: "Goodbye."
-  prompt_file: ./prompts/freeman.md
+  # rules: extra behavioural rules appended to the embedded system prompt.
+  # Use this for things specific to your setup — tone, disallowed topics,
+  # shorthand the assistant should recognise, etc.
+  rules: []
   wakeword:
     models_dir: "./models/wakeword"
     melspectrogram: "melspectrogram.onnx"
