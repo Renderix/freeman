@@ -64,7 +64,7 @@ func main() {
 		},
 	}
 
-	rootCmd.AddCommand(startCmd, versionCmd, callCmd)
+	rootCmd.AddCommand(startCmd, versionCmd, callCmd, logsCmd)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
