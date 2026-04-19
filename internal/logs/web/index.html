@@ -5,199 +5,247 @@
 <title>Freeman Logs</title>
 <style>
   :root {
-    --bg: #0f1113;
-    --panel: #181b1f;
-    --panel-2: #20252b;
-    --border: #2a2f36;
-    --text: #e7ebef;
-    --text-dim: #9aa3ad;
-    --accent: #7aa2f7;
-    --user: #74c7ec;
-    --assistant: #c4a7e7;
-    --filler: #5f6773;
-    --tool: #94e2d5;
-    --danger: #f38ba8;
-    --warn: #fab387;
+    --bg:       #111315;
+    --panel:    #171a1d;
+    --panel-2:  #1d2024;
+    --border:   #24282d;
+    --text:     #e4e6e8;
+    --text-dim: #8a9098;
+    --accent:   #8fb8ff;
+    --ok:       #6fd19a;
+    --bad:      #e06c75;
+    --hl:       #eaeaea;
   }
   * { box-sizing: border-box; }
   html, body {
     margin: 0; padding: 0;
     background: var(--bg); color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
-    font-size: 13px; line-height: 1.45;
+    font-size: 13px; line-height: 1.55;
   }
   header {
-    padding: 10px 16px;
+    padding: 10px 20px;
     border-bottom: 1px solid var(--border);
     background: var(--panel);
-    display: flex; gap: 12px; align-items: center;
+    display: flex; gap: 14px; align-items: center;
     position: sticky; top: 0; z-index: 10;
   }
-  header h1 {
-    margin: 0; font-size: 14px; font-weight: 600; letter-spacing: 0.02em;
+  header .brand {
+    font-size: 12px; font-weight: 600; letter-spacing: 0.08em;
     color: var(--text-dim); text-transform: uppercase;
+    padding-right: 8px; border-right: 1px solid var(--border);
+    margin-right: 4px;
   }
+  header label { color: var(--text-dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
   select {
     background: var(--panel-2); color: var(--text);
     border: 1px solid var(--border); border-radius: 4px;
-    padding: 4px 8px; font-size: 13px; font-family: inherit;
-    min-width: 280px;
+    padding: 4px 8px; font-size: 12px; font-family: inherit;
   }
-  .meta { color: var(--text-dim); font-size: 12px; }
-  main { padding: 16px; max-width: 900px; margin: 0 auto; }
+  select:focus { outline: 1px solid var(--accent); outline-offset: 1px; }
+  #date-picker    { min-width: 140px; }
+  #session-picker { min-width: 240px; }
+  .meta { margin-left: auto; color: var(--text-dim); font-size: 12px; }
 
-  /* Gantt strip */
+  main { padding: 20px 24px; max-width: 860px; margin: 0 auto; }
+
+  /* Gantt strip — subtle, no colors fighting the text. */
   .gantt {
     background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: 4px;
     padding: 10px 12px;
-    margin-bottom: 20px;
+    margin-bottom: 22px;
     font-size: 11px;
   }
-  .gantt-row { display: flex; align-items: center; height: 18px; margin: 2px 0; }
-  .gantt-label { width: 60px; color: var(--text-dim); flex-shrink: 0; }
+  .gantt-row { display: flex; align-items: center; height: 16px; margin: 1px 0; }
+  .gantt-label { width: 56px; color: var(--text-dim); flex-shrink: 0; letter-spacing: 0.02em; }
   .gantt-track {
-    position: relative; flex: 1; height: 12px;
-    background: #15181c; border-radius: 2px;
+    position: relative; flex: 1; height: 10px;
+    background: #0e1012; border-radius: 2px;
   }
-  .gantt-bar { position: absolute; height: 100%; border-radius: 2px; }
-  .gantt-bar.heard   { background: var(--user); }
-  .gantt-bar.speak   { background: var(--assistant); }
-  .gantt-bar.filler  { background: var(--filler); }
-  .gantt-bar.tool    { background: var(--tool); }
-  .gantt-bar.wake    { background: var(--warn); width: 2px !important; }
+  .gantt-bar { position: absolute; height: 100%; border-radius: 1px; }
+  .gantt-bar.heard   { background: #4a5562; }
+  .gantt-bar.speak   { background: #8a9098; }
+  .gantt-bar.filler  { background: #343a42; }
+  .gantt-bar.tool    { background: #6b7582; }
+  .gantt-bar.wake    { background: var(--accent); width: 2px !important; }
 
-  /* Turn rendering */
+  /* Startup/shutdown blocks — compact, quiet. */
   .startup, .shutdown {
-    margin-bottom: 16px; padding: 8px 12px;
+    margin-bottom: 18px; padding: 10px 14px;
     background: var(--panel); border: 1px solid var(--border);
-    border-radius: 6px; font-size: 11px; color: var(--text-dim);
+    border-radius: 4px; font-size: 11px; color: var(--text-dim);
+    font-family: "SF Mono", Menlo, Consolas, monospace;
   }
   .startup h3, .shutdown h3 {
-    margin: 0 0 4px 0; font-size: 11px; font-weight: 600;
-    letter-spacing: 0.08em; text-transform: uppercase;
+    margin: 0 0 6px 0; font-size: 10px; font-weight: 600;
+    letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
   }
 
-  .turn { margin: 18px 0; }
-  .bubble {
-    padding: 8px 12px; border-radius: 10px;
-    max-width: 640px;
+  /* Turn block — minimal, typography-driven. */
+  .turn {
+    margin: 24px 0;
+    padding-top: 18px;
+    border-top: 1px solid var(--border);
   }
-  .bubble.user {
-    background: #1b2838; border: 1px solid #2a4460;
-    color: var(--user);
-    margin-left: auto;
+  .turn-head {
+    display: flex; gap: 10px; align-items: baseline;
+    color: var(--text-dim); font-size: 11px;
+    margin-bottom: 10px;
+    letter-spacing: 0.02em;
   }
-  .bubble.user::before { content: "🎤 "; opacity: 0.8; }
-  .bubble.assistant {
-    background: #241f2e; border: 1px solid #3a2f4a;
-    color: var(--assistant);
-  }
-  .bubble.assistant::before { content: "🔊 "; opacity: 0.8; }
-  .bubble.filler {
-    background: transparent; border: 1px dashed var(--border);
-    color: var(--filler); font-style: italic;
-    font-size: 12px; padding: 4px 10px;
-  }
-  .bubble.filler::before { content: "💬 "; opacity: 0.6; }
+  .turn-head strong { color: var(--text); font-weight: 600; }
 
+  /* Bubbles: no coloured backgrounds — just a narrow left accent. */
+  .line {
+    padding: 4px 0 4px 14px;
+    border-left: 2px solid var(--border);
+    margin: 4px 0;
+    max-width: 700px;
+  }
+  .line.user {
+    border-left-color: var(--hl);
+    color: var(--hl);
+    font-weight: 500;
+  }
+  .line.user::before {
+    content: "You";
+    display: inline-block; width: 48px;
+    font-size: 10px; color: var(--text-dim); text-transform: uppercase;
+    letter-spacing: 0.1em; vertical-align: middle;
+    margin-right: 8px;
+  }
+  .line.assistant { border-left-color: var(--accent); }
+  .line.assistant::before {
+    content: "Horus";
+    display: inline-block; width: 48px;
+    font-size: 10px; color: var(--text-dim); text-transform: uppercase;
+    letter-spacing: 0.1em; vertical-align: middle;
+    margin-right: 8px;
+  }
+  .line.filler {
+    border-left-color: var(--border);
+    color: var(--text-dim);
+    font-style: italic;
+  }
+  .line.filler::before {
+    content: "(filler)";
+    display: inline-block; width: 48px;
+    font-size: 10px; color: var(--text-dim); text-transform: none;
+    letter-spacing: 0;
+    margin-right: 8px;
+  }
+
+  /* Timing chips — the one place colour carries meaning. */
   .chip {
-    display: inline-block; padding: 2px 8px; border-radius: 10px;
-    font-size: 11px; color: var(--text-dim);
-    background: var(--panel-2); border: 1px solid var(--border);
-    margin: 6px 0;
+    display: inline-block; padding: 1px 7px; border-radius: 2px;
+    font-size: 10px; letter-spacing: 0.04em;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    color: var(--text-dim);
+    background: transparent; border: 1px solid var(--border);
+    margin: 2px 0 2px 56px;
   }
-  .chip.red { color: var(--danger); border-color: #5a2838; background: #2a1018; }
-  .chip.ok  { color: var(--tool);   border-color: #2d4641; background: #0e2421; }
+  .chip.bad { color: var(--bad); border-color: rgba(224,108,117,0.4); }
+  .chip.ok  { color: var(--ok);  border-color: rgba(111,209,154,0.4); }
 
+  /* Tool rows — same left-accent treatment, expandable. */
   .tool {
-    margin: 6px 0; padding: 6px 10px;
-    background: var(--panel); border: 1px solid var(--border);
-    border-radius: 6px; font-size: 12px;
+    margin: 4px 0 4px 56px;
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    font-size: 12px;
+    background: var(--panel);
   }
   .tool summary {
     cursor: pointer; outline: none;
-    color: var(--tool);
+    color: var(--text);
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11px;
   }
-  .tool summary::before { content: "🔧 "; opacity: 0.7; }
-  .tool summary:hover { color: #fff; }
+  .tool summary::marker { color: var(--text-dim); }
+  .tool summary:hover { color: var(--accent); }
   .tool .kv {
-    display: grid; grid-template-columns: 70px 1fr; gap: 4px 10px;
-    margin-top: 6px; padding-top: 6px;
+    display: grid; grid-template-columns: 64px 1fr; gap: 4px 12px;
+    margin-top: 8px; padding-top: 8px;
     border-top: 1px dashed var(--border);
     color: var(--text-dim);
   }
   .tool .kv pre {
     margin: 0; white-space: pre-wrap; word-break: break-word;
-    background: #0c0e10; padding: 6px 8px; border-radius: 4px;
+    background: #0d0f11; padding: 8px 10px; border-radius: 3px;
     color: var(--text); font-size: 11px;
-    max-height: 300px; overflow: auto;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    max-height: 320px; overflow: auto;
+    border: 1px solid #1a1d20;
   }
-  .tool .fail { color: var(--danger); }
+  .tool .fail { color: var(--bad); }
 
-  .turn-head {
-    display: flex; gap: 8px; align-items: baseline;
-    color: var(--text-dim); font-size: 11px;
-    margin-bottom: 6px;
-  }
-  .turn-head strong { color: var(--text); font-weight: 600; }
+  footer { padding: 28px; text-align: center; color: var(--text-dim); font-size: 10px;
+           letter-spacing: 0.1em; text-transform: uppercase; }
 
-  footer { padding: 20px; text-align: center; color: var(--text-dim); font-size: 11px; }
-
-  .empty {
-    padding: 40px; text-align: center; color: var(--text-dim);
-  }
+  .empty { padding: 56px; text-align: center; color: var(--text-dim); }
 </style>
 </head>
 <body>
 
 <header>
-  <h1>Freeman&nbsp;Logs</h1>
-  <select id="session-picker"><option value="">loading…</option></select>
+  <span class="brand">Freeman Logs</span>
+  <label for="date-picker">Date</label>
+  <select id="date-picker"><option value="">—</option></select>
+  <label for="session-picker">Session</label>
+  <select id="session-picker"><option value="">—</option></select>
   <span id="session-meta" class="meta"></span>
 </header>
 
 <main id="app">
-  <div class="empty">Pick a session from the dropdown above.</div>
+  <div class="empty">Pick a session to begin.</div>
 </main>
 
-<footer>Local viewer — no network traffic.</footer>
+<footer>local · no network</footer>
 
 <script>
+const datePicker = document.getElementById('date-picker');
 const picker = document.getElementById('session-picker');
 const meta = document.getElementById('session-meta');
 const app = document.getElementById('app');
 
+// Keyed by date → array of sessions.
+let sessionsByDate = {};
+
 async function loadSessions() {
   const res = await fetch('/api/sessions');
   const list = await res.json();
-  picker.innerHTML = '';
   if (!list || list.length === 0) {
-    picker.innerHTML = '<option value="">no logs found</option>';
+    datePicker.innerHTML = '<option value="">no logs</option>';
+    picker.innerHTML = '<option value="">no logs</option>';
     return;
   }
-  // Group by date for nicer <optgroup>.
-  const byDate = {};
-  for (const s of list) {
-    (byDate[s.date] ||= []).push(s);
-  }
-  const dates = Object.keys(byDate).sort().reverse();
-  for (const d of dates) {
-    const og = document.createElement('optgroup');
-    og.label = d;
-    for (const s of byDate[d]) {
-      const o = document.createElement('option');
-      o.value = s.path;
-      o.textContent = s.filename;
-      og.appendChild(o);
-    }
-    picker.appendChild(og);
-  }
-  // Auto-load most recent.
-  picker.value = list[0].path;
-  await loadSession(list[0].path);
+  sessionsByDate = {};
+  for (const s of list) (sessionsByDate[s.date] ||= []).push(s);
+  const dates = Object.keys(sessionsByDate).sort().reverse();
+  datePicker.innerHTML = dates.map(d => `<option value="${d}">${d}</option>`).join('');
+  datePicker.value = dates[0];
+  populateSessions(dates[0]);
+  // Auto-load most recent session.
+  if (picker.value) await loadSession(picker.value);
 }
+
+function populateSessions(date) {
+  const sessions = sessionsByDate[date] || [];
+  picker.innerHTML = sessions
+    .map(s => `<option value="${s.path}">${s.filename}</option>`)
+    .join('');
+  if (sessions.length > 0) picker.value = sessions[0].path;
+}
+
+datePicker.addEventListener('change', () => {
+  populateSessions(datePicker.value);
+  if (picker.value) loadSession(picker.value);
+});
 
 picker.addEventListener('change', () => {
   if (picker.value) loadSession(picker.value);
@@ -221,13 +269,9 @@ function render(s) {
 
   const parts = [];
   parts.push(renderGantt(s));
-  if (s.startup && s.startup.length) {
-    parts.push(renderSegment('Startup', s.startup));
-  }
+  if (s.startup && s.startup.length) parts.push(renderSegment('Startup', s.startup));
   (s.turns || []).forEach(t => parts.push(renderTurn(t)));
-  if (s.shutdown && s.shutdown.length) {
-    parts.push(renderSegment('Shutdown', s.shutdown));
-  }
+  if (s.shutdown && s.shutdown.length) parts.push(renderSegment('Shutdown', s.shutdown));
   app.innerHTML = parts.join('');
 }
 
@@ -242,14 +286,11 @@ function renderGantt(s) {
     const width = Math.max(0.3, Number(b) - Number(a));
     return `<div class="gantt-bar ${klass}" style="left:${a}%;width:${width}%" title="${escapeHTML(title)}"></div>`;
   };
-
   const rows = { heard: [], speak: [], filler: [], tool: [], wake: [] };
-
   for (const t of s.turns) {
     rows.heard.push(bar('heard', t.start_time, t.start_time, 'heard: ' + t.heard_text));
     for (const line of (t.assistant_lines || [])) {
       const klass = line.is_filler ? 'filler' : 'speak';
-      // Estimate speak duration from text length (~80 chars/sec for voice).
       const dur = Math.max(250, (line.text.length / 80) * 1000);
       const endT = new Date(new Date(line.time).getTime() + dur).toISOString();
       rows[klass].push(bar(klass, line.time, endT, (line.is_filler?'[filler] ':'') + line.text));
@@ -268,39 +309,35 @@ function renderGantt(s) {
 
 function renderTurn(t) {
   const head = `<div class="turn-head"><strong>Turn ${t.index}</strong> · ${fmtTime(t.start_time)} · ${ (t.total_ms/1000).toFixed(1) }s total</div>`;
-  const user = `<div class="bubble user">${escapeHTML(t.heard_text)}</div>`;
-  const deadAirClass = t.dead_air_ms > 2500 ? 'red' : '';
+  const user = `<div class="line user">${escapeHTML(t.heard_text)}</div>`;
+  const deadAirClass = t.dead_air_ms > 2500 ? 'bad' : '';
   const deadAir = t.dead_air_ms > 0
-    ? `<div class="chip ${deadAirClass}">⏱ ${t.dead_air_ms} ms dead air</div>`
+    ? `<div class="chip ${deadAirClass}">${t.dead_air_ms} ms to first audio</div>`
     : '';
-
-  // Interleave speaking lines and tool calls in timestamp order so the
-  // narrative reads naturally.
   const items = [];
   (t.assistant_lines || []).forEach(l => items.push({ time: l.time, render: () => renderLine(l) }));
   (t.tools || []).forEach(tc => items.push({ time: tc.called_at, render: () => renderTool(tc) }));
   items.sort((a, b) => new Date(a.time) - new Date(b.time));
   const body = items.map(i => i.render()).join('');
-
   return `<div class="turn">${head}${user}${deadAir}${body}</div>`;
 }
 
 function renderLine(line) {
   const klass = line.is_filler ? 'filler' : 'assistant';
-  return `<div class="bubble ${klass}">${escapeHTML(line.text)}</div>`;
+  return `<div class="line ${klass}">${escapeHTML(line.text)}</div>`;
 }
 
 function renderTool(tc) {
-  const okChip = tc.ok
+  const chip = tc.ok
     ? `<span class="chip ok">${tc.duration_ms}ms</span>`
-    : `<span class="chip red">failed · ${tc.duration_ms}ms</span>`;
+    : `<span class="chip bad">failed · ${tc.duration_ms}ms</span>`;
   const args = tryPrettyJSON(tc.args);
   const out = tc.ok
     ? `<pre>${escapeHTML(tc.output || '(empty)')}</pre>`
     : `<pre class="fail">${escapeHTML(tc.error || tc.output || '(no error)')}</pre>`;
   return `
     <details class="tool">
-      <summary>${escapeHTML(tc.name)} ${okChip}</summary>
+      <summary>${escapeHTML(tc.name)} ${chip}</summary>
       <div class="kv">
         <div>args</div><pre>${escapeHTML(args)}</pre>
         <div>output</div>${out}
@@ -311,7 +348,7 @@ function renderTool(tc) {
 function renderSegment(title, events) {
   const rows = events.map(e => {
     const fields = e.fields ? Object.entries(e.fields).map(([k,v]) => `${k}=${v}`).join(' ') : '';
-    return `<div>${fmtTime(e.time)} · <strong>${escapeHTML(e.msg)}</strong>${fields ? ' · ' + escapeHTML(fields) : ''}</div>`;
+    return `<div>${fmtTime(e.time)} · ${escapeHTML(e.msg)}${fields ? ' · ' + escapeHTML(fields) : ''}</div>`;
   }).join('');
   return `<div class="startup"><h3>${title}</h3>${rows}</div>`;
 }
@@ -323,17 +360,12 @@ function fmtTime(iso) {
 
 function tryPrettyJSON(s) {
   if (!s) return '';
-  try {
-    return JSON.stringify(JSON.parse(s), null, 2);
-  } catch {
-    return s;
-  }
+  try { return JSON.stringify(JSON.parse(s), null, 2); } catch { return s; }
 }
 
 function escapeHTML(s) {
-  return String(s)
-    .replaceAll('&', '&amp;').replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;').replaceAll('"', '&quot;');
+  return String(s).replaceAll('&', '&amp;').replaceAll('<', '&lt;')
+                  .replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 }
 
 loadSessions();
