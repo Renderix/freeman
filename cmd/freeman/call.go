@@ -20,6 +20,7 @@ import (
 	"github.com/Renderix/freeman/internal/config"
 	"github.com/Renderix/freeman/internal/conv"
 	"github.com/Renderix/freeman/internal/engine"
+	"github.com/Renderix/freeman/internal/tools"
 	"github.com/spf13/cobra"
 )
 
@@ -183,7 +184,25 @@ func runCall(cmd *cobra.Command, args []string) error {
 	taskMgr := conv.NewTaskManager(taskFactory, logger)
 	defer taskMgr.Close()
 
-	// 11. Conv session. The system prompt is embedded in the conv
+	// 11. Tools registry. Loads MD-defined tools from the configured
+	// dirs; defaults to ./tools then ~/.freeman/tools. Tools are
+	// provider-agnostic (JSON Schema passed through to the LLM) and
+	// execute locally via the bash runner in internal/tools.
+	toolDirs := conf.Freeman.Tools.Dirs
+	if len(toolDirs) == 0 {
+		toolDirs = []string{filepath.Join(repoRoot, "tools")}
+		if home, herr := os.UserHomeDir(); herr == nil {
+			toolDirs = append(toolDirs, filepath.Join(home, ".freeman", "tools"))
+		}
+	}
+	toolSpecs, err := tools.LoadDirs(toolDirs)
+	if err != nil {
+		return fmt.Errorf("load tools: %w", err)
+	}
+	toolRegistry := tools.NewRegistry(toolSpecs)
+	logger.Info("tools loaded", "count", len(toolSpecs), "dirs", toolDirs)
+
+	// 12. Conv session. The system prompt is embedded in the conv
 	// package and built from Persona at Run time, so nothing needs
 	// loading here.
 	convSession, err := conv.NewSession(ctx, conv.Deps{
@@ -195,6 +214,7 @@ func runCall(cmd *cobra.Command, args []string) error {
 		TaskManager:    taskMgr,
 		ChatAgent:      chatAgent,
 		ModelResolver:  taskFactory.ResolveModel,
+		Tools:          toolRegistry,
 		Persona:        conf.Persona,
 		RepoRoot:       repoRoot,
 		Model:          conf.Freeman.PM.Model,

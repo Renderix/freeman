@@ -30,11 +30,17 @@ type TaskStateMsg =
   | { state: "done"; summary: string; activity_log?: ToolActivityEntry[] }
   | { state: "failed"; message: string; activity_log?: ToolActivityEntry[] };
 
+type ToolSpec = {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+};
 type InitMsg = {
   type: "init";
   system_prompt: string;
   project_context: string;
   model: string;
+  tools?: ToolSpec[];
 };
 type UserSayMsg = {
   type: "user_say";
@@ -178,6 +184,15 @@ export function runConvSidecar(
     Type.Object({}),
   );
 
+  // Dynamic tools: built from the init message's `tools` list. The Go
+  // side owns the implementation; we just forward calls via `tool_call`
+  // over the existing JSONL protocol. The parameters field is raw JSON
+  // Schema from the MD frontmatter and is passed through unchanged to
+  // pi-coding-agent (and on to the provider's function-calling API).
+  function makeDynamicTools(specs: ToolSpec[]) {
+    return specs.map((s) => makeTool(s.name, s.description, s.parameters as any));
+  }
+
   async function runInit(msg: InitMsg): Promise<void> {
     const fullSystemPrompt =
       msg.system_prompt +
@@ -203,10 +218,17 @@ export function runConvSidecar(
     unsubscribeAssistant?.();
     unsubscribeAssistant = null;
 
+    const dynamicTools = makeDynamicTools(msg.tools ?? []);
     const created = await createSession({
       model: getModel("anthropic", msg.model as never),
       tools: [],
-      customTools: [startTaskTool, replyToTaskTool, cancelTaskTool, taskStatusTool],
+      customTools: [
+        startTaskTool,
+        replyToTaskTool,
+        cancelTaskTool,
+        taskStatusTool,
+        ...dynamicTools,
+      ],
       resourceLoader: loader,
       sessionManager: SessionManager.inMemory(),
     });

@@ -65,6 +65,7 @@ func (a *ChatAgent) Init(ctx context.Context, cfg agent.ChatConfig) error {
 		SystemPrompt:   cfg.SystemPrompt,
 		ProjectContext: cfg.ProjectContext,
 		Model:          cfg.Model,
+		Tools:          cfg.Tools,
 	}); err != nil {
 		a.Close()
 		return fmt.Errorf("conv send init: %w", err)
@@ -204,10 +205,11 @@ func snapshotToPayload(s agent.TaskStateSnapshot) taskStatePayload {
 }
 
 type initMsg struct {
-	Type           string `json:"type"`
-	SystemPrompt   string `json:"system_prompt"`
-	ProjectContext string `json:"project_context"`
-	Model          string `json:"model"`
+	Type           string           `json:"type"`
+	SystemPrompt   string           `json:"system_prompt"`
+	ProjectContext string           `json:"project_context"`
+	Model          string           `json:"model"`
+	Tools          []agent.ToolSpec `json:"tools,omitempty"`
 }
 
 type userSayMsg struct {

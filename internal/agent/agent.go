@@ -21,6 +21,19 @@ type ChatConfig struct {
 	SystemPrompt   string
 	ProjectContext string
 	Model          string
+	// Tools is a provider-agnostic list of dynamic tool specs the chat
+	// LLM should have access to, in addition to any tools built into the
+	// agent implementation. Each spec carries a JSON Schema that is
+	// passed through verbatim to the provider's function-calling API.
+	Tools []ToolSpec
+}
+
+// ToolSpec is the neutral shape of a dynamic tool passed to a ChatAgent
+// at init time. Parameters is JSON Schema (object type).
+type ToolSpec struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters"`
 }
 
 // ChatAgent is a long-lived chat session that the voice loop drives.

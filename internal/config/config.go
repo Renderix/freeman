@@ -43,6 +43,14 @@ type FreemanConfig struct {
 	Audio   AudioConfig   `yaml:"audio"`
 	STT     STTConfig     `yaml:"stt"`
 	Logging LoggingConfig `yaml:"logging"`
+	Tools   ToolsConfig   `yaml:"tools"`
+}
+
+// ToolsConfig controls where MD-defined tools are loaded from. Dirs are
+// scanned in order; later dirs override earlier ones by tool name.
+// Empty means "use default dirs": ./tools then ~/.freeman/tools.
+type ToolsConfig struct {
+	Dirs []string `yaml:"dirs"`
 }
 
 type PMConfig struct {

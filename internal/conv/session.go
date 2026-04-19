@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"strings"
 	"strconv"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	"github.com/Renderix/freeman/internal/audio"
 	"github.com/Renderix/freeman/internal/audio/wakeword"
 	"github.com/Renderix/freeman/internal/config"
+	"github.com/Renderix/freeman/internal/tools"
 )
 
 // Transcriber is the subset of stt.Transcriber the conv layer needs.
@@ -46,6 +48,10 @@ type Deps struct {
 	TaskManager    *TaskManager
 	ChatAgent      agent.ChatAgent
 	ModelResolver  func(hint string) string
+	// Tools is the registry of MD-defined tools available to the chat
+	// LLM. Hardcoded TaskManager tools (start_task etc.) take precedence;
+	// anything else falls through to the registry.
+	Tools          *tools.Registry
 
 	Persona  config.PersonaConfig // persona config drives name, greeting, rules, wakeword
 	Model    string               // e.g. "claude-haiku-4-5"
@@ -65,6 +71,10 @@ type Session struct {
 	turnMu        sync.Mutex
 	currentTurnID string
 	turnCanceled  bool
+	// fillerSpoken is true once a tool-call filler has been emitted for
+	// the current turn. Chained tool calls within the same turn skip the
+	// filler to avoid "Searching the web. Pulling that up." back-to-back.
+	fillerSpoken  bool
 
 	cancelSpeak   func()
 	speakDone     chan struct{}
@@ -134,10 +144,21 @@ func (s *Session) Run(ctx context.Context) error {
 	systemPrompt := BuildSystemPrompt(s.deps.Persona)
 
 	projectCtx := Read(s.deps.RepoRoot)
+	var toolSpecs []agent.ToolSpec
+	if s.deps.Tools != nil {
+		for _, t := range s.deps.Tools.Specs() {
+			toolSpecs = append(toolSpecs, agent.ToolSpec{
+				Name:        t.Name,
+				Description: t.Description,
+				Parameters:  t.Parameters,
+			})
+		}
+	}
 	if err := s.deps.ChatAgent.Init(ctx, agent.ChatConfig{
 		SystemPrompt:   systemPrompt,
 		ProjectContext: projectCtx,
 		Model:          s.deps.Model,
+		Tools:          toolSpecs,
 	}); err != nil {
 		return fmt.Errorf("chat agent init: %w", err)
 	}
@@ -351,7 +372,21 @@ func (s *Session) setTurn(id string) {
 	s.turnMu.Lock()
 	s.currentTurnID = id
 	s.turnCanceled = false
+	s.fillerSpoken = false
 	s.turnMu.Unlock()
+}
+
+// claimFillerSlot atomically reports whether the caller is the first to
+// want to speak a filler on the current turn. Returns true exactly once
+// per turn.
+func (s *Session) claimFillerSlot() bool {
+	s.turnMu.Lock()
+	defer s.turnMu.Unlock()
+	if s.fillerSpoken {
+		return false
+	}
+	s.fillerSpoken = true
+	return true
 }
 
 func (s *Session) markTurnCanceled() {
@@ -369,12 +404,25 @@ func (s *Session) turnActive(id string) bool {
 // assistantBuffer accumulates streamed assistant text and splits it into
 // spoken sentences on newline boundaries. The system prompt instructs the
 // model to put each sentence on its own line, so a newline means "this
-// sentence is complete, start synthesizing." Anything after the last
-// newline is held until the next chunk or until drain() runs at turn end.
+// sentence is complete, start synthesizing."
+//
+// To cut first-sentence latency, the very first utterance of each turn is
+// allowed to flush early at a clause break (",", ";", ":") once the buffer
+// is long enough to sound natural. Subsequent sentences fall through to
+// the newline path so rhythm stays intact.
 type assistantBuffer struct {
-	mu  sync.Mutex
-	buf strings.Builder
+	mu              sync.Mutex
+	buf             strings.Builder
+	firstEmitted    bool
 }
+
+// earlyFlushMinChars is the minimum prefix length before a clause break is
+// considered for early flushing. Avoids emitting tiny fragments like "Sure,".
+const earlyFlushMinChars = 30
+
+// earlyFlushMaxChars caps how far we scan for a clause break. Past this we
+// wait for a full sentence rather than dice a long clause.
+const earlyFlushMaxChars = 90
 
 func (b *assistantBuffer) appendAndFlush(chunk string) []string {
 	b.mu.Lock()
@@ -382,15 +430,28 @@ func (b *assistantBuffer) appendAndFlush(chunk string) []string {
 	b.buf.WriteString(chunk)
 	full := b.buf.String()
 
-	idx := strings.LastIndexByte(full, '\n')
-	if idx < 0 {
-		return nil
+	var out []string
+
+	if !b.firstEmitted {
+		if cut := findEarlyClauseBreak(full); cut > 0 {
+			if seg := strings.TrimSpace(full[:cut]); seg != "" {
+				out = append(out, seg)
+				b.firstEmitted = true
+			}
+			b.buf.Reset()
+			b.buf.WriteString(full[cut:])
+			full = b.buf.String()
+		}
 	}
 
-	var out []string
+	idx := strings.LastIndexByte(full, '\n')
+	if idx < 0 {
+		return out
+	}
 	for _, line := range strings.Split(full[:idx], "\n") {
 		if seg := strings.TrimSpace(line); seg != "" {
 			out = append(out, seg)
+			b.firstEmitted = true
 		}
 	}
 	rem := full[idx+1:]
@@ -404,7 +465,33 @@ func (b *assistantBuffer) drain() string {
 	defer b.mu.Unlock()
 	out := strings.TrimSpace(b.buf.String())
 	b.buf.Reset()
+	b.firstEmitted = false
 	return out
+}
+
+// findEarlyClauseBreak returns the byte index just after the first clause
+// break (comma / semicolon / colon followed by whitespace) within the
+// earlyFlush bounds, or -1 if none yet. Returning >0 means the caller
+// should flush everything up to (but not including) that index.
+func findEarlyClauseBreak(s string) int {
+	if len(s) < earlyFlushMinChars {
+		return -1
+	}
+	limit := len(s)
+	if limit > earlyFlushMaxChars {
+		limit = earlyFlushMaxChars
+	}
+	for i := earlyFlushMinChars; i < limit-1; i++ {
+		c := s[i]
+		if c != ',' && c != ';' && c != ':' {
+			continue
+		}
+		n := s[i+1]
+		if n == ' ' || n == '\t' || n == '\n' {
+			return i + 1
+		}
+	}
+	return -1
 }
 
 func (s *Session) handleAssistantSay(ev agent.ChatEvent) {
@@ -513,10 +600,66 @@ drained:
 
 func (s *Session) handleToolCall(ev agent.ChatEvent) {
 	go func() {
+		// Pre-announce slow MD tools so the user hears a filler instead
+		// of dead air while the tool runs and the LLM re-decodes. Task
+		// tools are skipped because the model already narrates those
+		// ("Looking at the sidecar directory now.") before emitting the
+		// start_task call.
+		if phrase := toolFillerPhrase(ev.Name); phrase != "" && s.claimFillerSlot() {
+			s.speakSentence(phrase)
+		}
 		result := s.runTool(ev.Name, ev.Args)
 		raw, _ := json.Marshal(result)
 		_ = s.deps.ChatAgent.ToolResult(ev.CallID, raw)
 	}()
+}
+
+// toolFillerVariants is the pool of casual acknowledgements played at the
+// start of a tool call. Keeping 3–4 short variants per tool stops the
+// response from feeling canned over a long conversation.
+var toolFillerVariants = map[string][]string{
+	"web_search": {
+		"One sec, let me check.",
+		"Hold on, looking.",
+		"Hmm, lemme see.",
+		"Give me a second.",
+	},
+	"web_fetch": {
+		"Hang on.",
+		"One moment.",
+		"Reading that.",
+	},
+	"read_file": {
+		"Hold on.",
+		"One sec.",
+		"Let me look at that.",
+	},
+	"file_search": {
+		"Lemme find it.",
+		"Hold on, searching.",
+		"One sec.",
+	},
+	"screenshot": {
+		"Let me look.",
+		"Checking your screen.",
+		"One sec.",
+	},
+	"system_stats": {
+		"Hold on.",
+		"One sec.",
+		"Let me check.",
+	},
+}
+
+// toolFillerPhrase returns a casual acknowledgement for a tool call, or
+// the empty string for fast tools and task tools (which the model already
+// narrates itself).
+func toolFillerPhrase(name string) string {
+	variants, ok := toolFillerVariants[name]
+	if !ok || len(variants) == 0 {
+		return ""
+	}
+	return variants[rand.Intn(len(variants))]
 }
 
 type toolOk struct {
@@ -566,6 +709,22 @@ func (s *Session) runTool(name string, args json.RawMessage) any {
 		return snap
 
 	default:
+		if s.deps.Tools != nil && s.deps.Tools.Has(name) {
+			start := time.Now()
+			s.log.Info("mdtool call", "name", name, "args", string(args))
+			res := s.deps.Tools.Run(context.Background(), name, args)
+			dur := time.Since(start).Milliseconds()
+			if res.Ok {
+				out := res.Output
+				if len(out) > 200 {
+					out = out[:200] + "…"
+				}
+				s.log.Info("mdtool result", "name", name, "ok", true, "duration_ms", dur, "output_preview", out)
+			} else {
+				s.log.Info("mdtool result", "name", name, "ok", false, "duration_ms", dur, "error", res.Error)
+			}
+			return res
+		}
 		return toolErr{Ok: false, Error: "unknown tool: " + name}
 	}
 }
