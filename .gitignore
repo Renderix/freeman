@@ -1,54 +1,19 @@
-# Binary
-/freeman-go
-/freeman
+.gradle/
+**/build/
+local.properties
+*.class
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
 
-# Models (download via scripts/setup_go_models.sh and setup_whisper_model.sh)
-models/*.onnx
-models/wakeword/
-models/*.bin
-models/*.tar.bz2
-models/espeak-ng-data/
-models/whisper/
+# Downloaded native libs — re-fetch with scripts/setup_kotlin_libs.sh
+macos/libs/
+android/libs/
+android/src/main/jniLibs/
 
-# Local agent/tooling state
-.claude/
-scripts/.openwakeword-trainer/
+# Downloaded ML models — re-fetch with scripts/setup_models.sh
+models/
 
-# Go build artifacts
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-
-# Test binary
-*.test
-
-# Output of go coverage
-*.out
-
-# Dependency directories
-vendor/
-
-# IDE/Editor
-.vscode/
+# IDE
 .idea/
-*.swp
-*.swo
-*~
-
-# OS-specific
+*.iml
 .DS_Store
-Thumbs.db
-
-# Local config/secrets
-.env
-.env.local
-.env.*.local
-
-# Logs
-*.log
-
-# User settings (local only)
-# ~/.config/freeman/ is used instead
-/lib/

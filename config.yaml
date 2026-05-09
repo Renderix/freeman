@@ -1,70 +1,26 @@
-server:
-  port: 17000
+persona:
+  name: Freeman
+  greeting: "Hey, I'm Freeman. What can I do for you?"
+  farewell: "Catch you later."
 
-model:
-  dir: "./models"
-  model_file: "model.onnx"
-  voices_file: "voices.bin"
-  tokens_file: "tokens.txt"
-  data_dir: "espeak-ng-data"
+llm:
+  provider: ollama
+  model: gemma4:e4b
+  baseUrl: http://localhost:11434
 
 tts:
-  default_voice: "bm_george"
-  default_speed: 1.0
-  max_sentence_chars: 150
-  partial_sentence_timeout_sec: 2.0
+  modelPath: ./models/kokoro
+  voice: bm_george
+  speed: 1.0
 
-freeman:
-  pm:
-    model: claude-haiku-4-5
-    confidence_threshold: 0.8
-    api_key_env: ANTHROPIC_API_KEY
-  worker:
-    default_model: claude-sonnet-4-6
-    opus_model: claude-opus-4-6
-    auth: subscription
-  audio:
-    input_device: ""
-    output_device: ""
-  stt:
-    model: whisper-large-v3-turbo
-    server_path: ""
-    server_port: 0
-    model_path: ./models/whisper/ggml-large-v3-turbo.bin
-    startup_timeout_ms: 30000
-    vad:
-      silence_ms: 500
-      min_speech_ms: 300
-      hangover_ms: 500
-      aggressiveness: 2
-  logging:
-    transcript_dir: ./.freeman/transcripts
+stt:
+  enabled: true
+  modelPath: ./models/moonshine
 
-persona:
-  name: "Horus"
-  greeting: "Hi! What can I do for you?"
-  farewell: "Goodbye."
-  # rules: extra behavioural rules appended to the embedded system prompt.
-  # Use this for things specific to your setup — tone, disallowed topics,
-  # shorthand the assistant should recognise, etc.
-  rules:
-    - "Talk like a close friend on a call — casual, warm, contractions, occasional 'yeah' / 'so' / 'actually'."
-    - "Never start with 'Based on', 'According to', 'I found', or any report-style preamble. Lead with the answer."
-    - "Show mild reactions when they fit — 'oh nice', 'hmm interesting', 'ugh that's annoying'. Sparingly, not every turn."
-    - "If you just looked something up, don't narrate it after. The acknowledgement was already spoken."
-    - "For factual lookups, give the answer first in plain words. One fact, maybe one follow-up. Don't list."
-    - "Avoid opening with 'Let me check' or similar filler phrases — those are already spoken by the system before you reply."
-  wakeword:
-    models_dir: "./models/wakeword"
-    melspectrogram: "melspectrogram.onnx"
-    embedding: "embedding_model.onnx"
-    keywords:
-      wake:
-        model: "horus.onnx"
-        threshold: 0.5
-      mute:
-        model: "standby.onnx"
-        threshold: 0.5
-      stop:
-        model: "disengage.onnx"
-        threshold: 0.5
+wakeword:
+  modelsDir: ./models/wakeword
+  threshold: 0.5
+
+tools:
+  dirs:
+    - ./tools
