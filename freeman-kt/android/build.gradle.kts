@@ -25,4 +25,6 @@ dependencies {
     implementation(project(":shared"))
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.onnxruntime.android)
+    // sherpa-onnx Java API JAR + native .so via jniLibs/ — download via scripts/setup_kotlin_libs.sh
+    implementation(fileTree("libs") { include("*.jar") })
 }

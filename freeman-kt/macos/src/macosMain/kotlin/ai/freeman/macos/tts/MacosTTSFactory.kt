@@ -16,7 +16,6 @@ object MacosTTSFactory {
             tts.loadCustomVoice(
                 referenceWavPath = wavPath,
                 encoderPath = "${config.modelPath}/model.onnx",
-                voicesPath = "${config.modelPath}/voices.bin",
             )
         }
         return tts

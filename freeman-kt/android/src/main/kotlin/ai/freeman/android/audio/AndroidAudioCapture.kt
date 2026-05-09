@@ -5,7 +5,11 @@ import ai.freeman.audio.AudioFrame
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 class AndroidAudioCapture : AudioCapture {
     private var record: AudioRecord? = null

@@ -4,8 +4,8 @@ import ai.freeman.tts.TTS
 import ai.freeman.tts.VoiceProfile
 import com.k2fsa.sherpa.onnx.OfflineTts
 import com.k2fsa.sherpa.onnx.OfflineTtsConfig
-import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsKokoroModelConfig
+import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig
 import com.k2fsa.sherpa.onnx.SpeakerEmbeddingExtractor
 import com.k2fsa.sherpa.onnx.SpeakerEmbeddingExtractorConfig
 
@@ -27,42 +27,41 @@ class KokoroTTS(
     )
 
     init {
-        val config = OfflineTtsConfig(
-            model = OfflineTtsModelConfig(
-                kokoro = OfflineTtsKokoroModelConfig(
-                    model = modelPath,
-                    voices = voicesPath,
-                    tokens = tokensPath,
-                    dataDir = dataDir,
-                ),
-                numThreads = 2,
-                debug = false,
-            ),
+        val kokoroConfig = OfflineTtsKokoroModelConfig.builder()
+            .setModel(modelPath)
+            .setVoices(voicesPath)
+            .setTokens(tokensPath)
+            .setDataDir(dataDir)
+            .build()
+        val modelConfig = OfflineTtsModelConfig.builder()
+            .setKokoro(kokoroConfig)
+            .setNumThreads(2)
+            .build()
+        tts = OfflineTts(
+            OfflineTtsConfig.builder()
+                .setModel(modelConfig)
+                .build()
         )
-        tts = OfflineTts(config)
     }
 
-    fun loadCustomVoice(referenceWavPath: String, encoderPath: String, voicesPath: String) {
+    fun loadCustomVoice(referenceWavPath: String, encoderPath: String) {
         val extractor = SpeakerEmbeddingExtractor(
-            SpeakerEmbeddingExtractorConfig(model = encoderPath)
+            SpeakerEmbeddingExtractorConfig.builder()
+                .setModel(encoderPath)
+                .build()
         )
         val stream = extractor.createStream()
         val (samples, sampleRate) = readWav(referenceWavPath)
-        stream.acceptWaveform(samples, sampleRate = sampleRate)
+        stream.acceptWaveform(samples, sampleRate)
         stream.inputFinished()
         customEmbedding = extractor.compute(stream)
         stream.release()
+        extractor.release()
     }
 
     override suspend fun synthesize(text: String, voice: VoiceProfile?): FloatArray {
         val speakerId = voice?.speakerId ?: voice?.name?.let { voiceIds[it] } ?: 0
-        val audio = tts.generateWithCallback(
-            text = text,
-            sid = speakerId,
-            speed = defaultSpeed,
-            callback = { _ -> true },
-        )
-        return audio.samples
+        return tts.generate(text, speakerId, defaultSpeed).getSamples()
     }
 
     fun close() = tts.release()

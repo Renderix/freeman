@@ -1,0 +1,26 @@
+persona:
+  name: Freeman
+  greeting: "Hey, I'm Freeman. What can I do for you?"
+  farewell: "Catch you later."
+
+llm:
+  provider: ollama
+  model: gemma4:e4b
+  baseUrl: http://localhost:11434
+
+tts:
+  modelPath: ./models/kokoro
+  voice: bm_george
+  speed: 1.0
+
+stt:
+  enabled: true
+  modelPath: ./models/moonshine
+
+wakeword:
+  modelsDir: ./models/wakeword
+  threshold: 0.5
+
+tools:
+  dirs:
+    - ./tools

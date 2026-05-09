@@ -16,6 +16,7 @@ data class FreemanConfig(
 data class PersonaConfig(
     val name: String = "Freeman",
     val greeting: String = "Hi, how can I help?",
+    val farewell: String = "Goodbye.",
     val rules: List<String> = emptyList(),
 )
 

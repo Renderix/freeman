@@ -5,7 +5,7 @@ serialization = "1.7.1"
 ktor = "3.0.0"
 graalvm-native = "0.10.3"
 android-gradle = "8.3.0"
-sherpa-onnx = "1.10.30"
+sherpa-onnx = "1.13.1"
 onnxruntime = "1.19.2"
 
 [libraries]

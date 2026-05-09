@@ -1,6 +1,10 @@
 package ai.freeman.macos.config
 
-import ai.freeman.config.*
+import ai.freeman.config.FreemanConfig
+import ai.freeman.config.LLMConfig
+import ai.freeman.config.STTConfig
+import ai.freeman.config.TTSConfig
+import ai.freeman.config.WakeWordConfig
 
 object ConfigLoader {
     fun load(path: String): FreemanConfig {

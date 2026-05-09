@@ -1,7 +1,10 @@
 package ai.freeman.conv
 
 import ai.freeman.config.FreemanConfig
-import ai.freeman.llm.*
+import ai.freeman.llm.Delta
+import ai.freeman.llm.LLMProvider
+import ai.freeman.llm.Message
+import ai.freeman.llm.Tool
 import ai.freeman.tasks.TaskManager
 import ai.freeman.tools.ToolRegistry
 import ai.freeman.tts.TTS
