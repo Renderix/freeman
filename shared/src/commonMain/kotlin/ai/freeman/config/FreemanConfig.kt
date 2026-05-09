@@ -22,9 +22,12 @@ data class PersonaConfig(
 
 @Serializable
 data class LLMConfig(
-    val provider: String = "ollama",          // "ollama" | "litert"
+    val provider: String = "ollama",          // "ollama" | "claude" | "litert"
     val model: String = "gemma4:e4b",
     val baseUrl: String = "http://localhost:11434",
+    val apiKey: String? = null,               // Claude: key or set ANTHROPIC_API_KEY env var
+    val numCtx: Int = 8192,                   // Ollama: context window (tokens)
+    val keepAlive: String = "-1",             // Ollama: keep model loaded forever
 )
 
 @Serializable

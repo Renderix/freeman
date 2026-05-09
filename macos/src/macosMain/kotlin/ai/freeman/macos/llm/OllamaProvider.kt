@@ -75,6 +75,8 @@ class OllamaProvider(private val config: LLMConfig) : LLMProvider {
         buildJsonObject {
             put("model", config.model)
             put("stream", true)
+            put("keep_alive", config.keepAlive)
+            put("options", buildJsonObject { put("num_ctx", config.numCtx) })
             put("messages", buildJsonArray {
                 messages.forEach { msg ->
                     add(buildJsonObject {

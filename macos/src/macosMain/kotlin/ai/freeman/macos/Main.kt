@@ -6,6 +6,7 @@ import ai.freeman.conv.ConversationLoop
 import ai.freeman.macos.audio.PortAudioCapture
 import ai.freeman.macos.audio.PortAudioPlayback
 import ai.freeman.macos.config.ConfigLoader
+import ai.freeman.macos.llm.ClaudeProvider
 import ai.freeman.macos.llm.OllamaProvider
 import ai.freeman.macos.stt.MoonshineStt
 import ai.freeman.macos.tools.ProcessToolRunner
@@ -24,7 +25,10 @@ fun main(args: Array<String>) {
     println("[Freeman] Starting — persona: ${config.persona.name}")
     println("[Freeman] LLM: ${config.llm.provider}/${config.llm.model}")
 
-    val llm = OllamaProvider(config.llm)
+    val llm = when (config.llm.provider) {
+        "claude" -> ClaudeProvider(config.llm)
+        else     -> OllamaProvider(config.llm)
+    }
     val tts = MacosTTSFactory.create(config.tts)
     val stt = MoonshineStt(config.stt.modelPath)
     val vad = SileroVAD("${config.wakeword.modelsDir}/../silero/silero_vad.onnx")

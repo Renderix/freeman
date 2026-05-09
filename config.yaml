@@ -4,9 +4,12 @@ persona:
   farewell: "Catch you later."
 
 llm:
-  provider: ollama
-  model: gemma4:e4b
+  provider: ollama          # ollama | claude
+  model: gemma4:e4b         # ollama model name  — or claude-sonnet-4-6 / claude-opus-4-7
   baseUrl: http://localhost:11434
+  numCtx: 8192              # ollama: context window size (tokens)
+  keepAlive: "-1"           # ollama: keep model loaded forever (-1 = never unload)
+  # apiKey: sk-ant-...      # claude: or set ANTHROPIC_API_KEY env var
 
 tts:
   modelPath: ./models/kokoro
