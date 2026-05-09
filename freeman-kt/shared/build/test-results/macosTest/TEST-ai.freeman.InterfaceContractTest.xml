@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="ai.freeman.InterfaceContractTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-05-09T21:19:33" hostname="Ayusmans-MacBook-Air.local" time="0.037">
+  <properties/>
+  <testcase name="messageRoundTrip[macos]" classname="ai.freeman.InterfaceContractTest" time="0.033"/>
+  <testcase name="voiceProfileSerializable[macos]" classname="ai.freeman.InterfaceContractTest" time="0.001"/>
+  <testcase name="voiceProfileDefaultSpeakerId[macos]" classname="ai.freeman.InterfaceContractTest" time="0.0"/>
+  <testcase name="toolParametersPassThrough[macos]" classname="ai.freeman.InterfaceContractTest" time="0.003"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
