@@ -27,6 +27,17 @@ kotlin {
         }
         commonTest.dependencies {
             implementation(kotlin("test"))
+            implementation(libs.kotlinx.coroutines.core)
+        }
+        val macosMain by getting {
+            dependencies {
+                implementation(libs.onnxruntime)
+            }
+        }
+        val androidMain by getting {
+            dependencies {
+                implementation(libs.onnxruntime.android)
+            }
         }
     }
 }
