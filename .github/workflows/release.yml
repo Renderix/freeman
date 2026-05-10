@@ -28,6 +28,16 @@ jobs:
           curl -fL "$BASE_URL/sherpa-onnx-native-lib-osx-aarch64-v${SHERPA_VERSION}.jar" \
                -o "macos/libs/sherpa-onnx-native-lib-osx-aarch64-v${SHERPA_VERSION}.jar"
 
+      - name: Build AVFoundation JNI wrapper
+        run: |
+          JAVA_HOME=$(java -XshowSettings:all -version 2>&1 | awk '/java.home/{print $3}')
+          mkdir -p macos/libs
+          clang++ -shared -fPIC -O2 \
+            -framework AVFoundation -framework AudioToolbox -framework Foundation \
+            -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/darwin" \
+            -o macos/libs/libavfoundation_audio_jni.dylib \
+            macos/native/libavfoundation_audio_jni.mm
+
       - name: Build fat JAR
         run: ./gradlew :macos:macosJar
 

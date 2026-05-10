@@ -89,34 +89,22 @@ echo "https://github.com/k2-fsa/sherpa-onnx/releases"
 LIBS_PATH=$(prompt "Path to sherpa-onnx libs directory" "$DIR/libs")
 echo ""
 
-# Build libportaudio_jni.dylib if on macOS and not already present
-if [[ "$(uname)" == "Darwin" ]] && [ ! -f "$LIBS_PATH/libportaudio_jni.dylib" ]; then
-  echo "-- PortAudio JNI --"
-  if ! command -v brew &>/dev/null; then
-    echo "Homebrew not found — skipping libportaudio_jni.dylib build."
-    echo "Install Homebrew and PortAudio, then compile macos/native/libportaudio_jni.c manually."
-  elif ! brew list portaudio &>/dev/null; then
-    echo "PortAudio not installed. Installing via Homebrew…"
-    brew install portaudio
-  fi
-  if command -v brew &>/dev/null && brew list portaudio &>/dev/null; then
-    PA_PREFIX="$(brew --prefix portaudio)"
-    JAVA_HOME="${JAVA_HOME:-$(java -XshowSettings:all -version 2>&1 | awk '/java.home/{print $3}')}"
-    JNI_SRC="$DIR/macos/native/libportaudio_jni.c"
-    if [ -f "$JNI_SRC" ]; then
-      mkdir -p "$LIBS_PATH"
-      echo "Building libportaudio_jni.dylib…"
-      clang -shared -fPIC -O2 \
-        -I"$PA_PREFIX/include" \
-        -I"$JAVA_HOME/include" \
-        -I"$JAVA_HOME/include/darwin" \
-        -L"$PA_PREFIX/lib" -lportaudio \
-        -o "$LIBS_PATH/libportaudio_jni.dylib" \
-        "$JNI_SRC"
-      echo "libportaudio_jni.dylib → $LIBS_PATH/"
-    else
-      echo "JNI source not found at $JNI_SRC — skipping."
-    fi
+# Build libavfoundation_audio_jni.dylib if on macOS and not already present
+if [[ "$(uname)" == "Darwin" ]] && [ ! -f "$LIBS_PATH/libavfoundation_audio_jni.dylib" ]; then
+  echo "-- AVFoundation Audio JNI --"
+  JAVA_HOME="${JAVA_HOME:-$(java -XshowSettings:all -version 2>&1 | awk '/java.home/{print $3}')}"
+  JNI_SRC="$DIR/macos/native/libavfoundation_audio_jni.mm"
+  if [ -f "$JNI_SRC" ]; then
+    mkdir -p "$LIBS_PATH"
+    echo "Building libavfoundation_audio_jni.dylib..."
+    clang++ -shared -fPIC -O2 \
+      -framework AVFoundation -framework AudioToolbox -framework Foundation \
+      -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/darwin" \
+      -o "$LIBS_PATH/libavfoundation_audio_jni.dylib" \
+      "$JNI_SRC"
+    echo "libavfoundation_audio_jni.dylib → $LIBS_PATH/"
+  else
+    echo "JNI source not found at $JNI_SRC — skipping."
   fi
   echo ""
 fi
