@@ -1,5 +1,6 @@
 #import <AVFoundation/AVFoundation.h>
 #import <jni.h>
+#import <stdatomic.h>
 #import <stdlib.h>
 #import <string.h>
 
@@ -21,7 +22,11 @@ static AVAudioFormat*     gPlayFmt    = nil;
 static float*             gAccum      = NULL;
 static int                gAccumSize  = 0;
 static int                gFrameSize  = 512;
-// Echo suppression: mute mic while speaker is active + tail
+// Echo suppression: mute mic while speaker is active + tail.
+// Counter tracks how many buffers are in-flight (including their 300 ms tail).
+// gIsPlaying is only cleared when the counter reaches 0 so sentence N's tail
+// cannot un-mute the mic while sentence N+1 is still playing.
+static _Atomic int        gPlayingBuffers = 0;
 static volatile BOOL      gIsPlaying  = NO;
 
 JNIEXPORT jint JNICALL Java_ai_freeman_macos_audio_AVFoundationAudioJNI_startCapture(
@@ -182,6 +187,7 @@ JNIEXPORT void JNICALL Java_ai_freeman_macos_audio_AVFoundationAudioJNI_stopCapt
     gCapConv = nil; gTargetFmt = nil; gPlayFmt = nil;
     free(gAccum); gAccum = NULL; gAccumSize = 0;
     if (gCallback) { env->DeleteGlobalRef(gCallback); gCallback = NULL; }
+    atomic_store(&gPlayingBuffers, 0); gIsPlaying = NO;
 }
 
 JNIEXPORT jint JNICALL Java_ai_freeman_macos_audio_AVFoundationAudioJNI_playSamples(
@@ -219,13 +225,18 @@ JNIEXPORT jint JNICALL Java_ai_freeman_macos_audio_AVFoundationAudioJNI_playSamp
         if (convErr || playBuf.frameLength == 0) return -1;
     }
 
+    atomic_fetch_add(&gPlayingBuffers, 1);
     gIsPlaying = YES;
     dispatch_semaphore_t sem = dispatch_semaphore_create(0);
     [playerNode scheduleBuffer:playBuf completionHandler:^{
-        // Keep mic muted for 300 ms after playback ends to absorb speaker tail
+        // Keep mic muted for 300 ms after this buffer ends, but only clear the
+        // flag when the last in-flight buffer's tail has elapsed — prevents a
+        // previous sentence's tail from un-muting the mic mid-next-sentence.
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 300 * NSEC_PER_MSEC),
                        dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
-            gIsPlaying = NO;
+            if (atomic_fetch_sub(&gPlayingBuffers, 1) == 1) {
+                gIsPlaying = NO;
+            }
         });
         dispatch_semaphore_signal(sem);
     }];
@@ -237,6 +248,7 @@ JNIEXPORT jint JNICALL Java_ai_freeman_macos_audio_AVFoundationAudioJNI_playSamp
 JNIEXPORT void JNICALL Java_ai_freeman_macos_audio_AVFoundationAudioJNI_stopPlayback(
         JNIEnv* env, jclass cls) {
     if (playerNode) [playerNode stop];
+    atomic_store(&gPlayingBuffers, 0); gIsPlaying = NO;
 }
 
 #ifdef __cplusplus
