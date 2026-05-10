@@ -34,11 +34,16 @@ class SentenceBuffer(private val onSentence: (String) -> Unit) {
             return
         }
 
-        // No sentence-end yet — flush on a clause break if buffer is long enough.
-        val lastChar = s.trimEnd().lastOrNull() ?: return
-        if (lastChar in CLAUSE_BREAK && s.length >= EARLY_FLUSH_MIN_LEN) {
-            onSentence(s)
-            buf.clear()
+        // No sentence-end yet — flush up to the first clause break that appears
+        // after EARLY_FLUSH_MIN_LEN chars so chunks sent to TTS stay short.
+        if (s.length > EARLY_FLUSH_MIN_LEN) {
+            val clauseEnd = (EARLY_FLUSH_MIN_LEN until s.length).firstOrNull { s[it] in CLAUSE_BREAK }
+            if (clauseEnd != null) {
+                val chunk = s.substring(0, clauseEnd + 1)
+                if (chunk.isNotBlank()) onSentence(chunk)
+                buf.clear()
+                buf.append(s.substring(clauseEnd + 1))
+            }
         }
     }
 }
