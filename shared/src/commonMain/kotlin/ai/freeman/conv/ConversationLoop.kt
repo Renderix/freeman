@@ -42,7 +42,7 @@ class ConversationLoop(
         history.add(Message(role = Role.user, content = userText))
         memoryStore?.save(Memory(role = "user", content = text, sessionId = sessionId))
 
-        val recalled = memoryStore?.search(text, limit = 5) ?: emptyList()
+        val recalled = memoryStore?.search(text, limit = config.memory.recallLimit) ?: emptyList()
         val systemPrompt = SystemPrompt.build(config.persona, toolRegistry.tools(), recalled)
 
         val messages = listOf(Message(role = Role.system, content = systemPrompt)) + history
@@ -67,6 +67,10 @@ class ConversationLoop(
             memoryStore?.save(Memory(role = "assistant", content = reply, sessionId = sessionId))
             tts.synthesize(reply)
         }
+
+        // Trim in-session history to the sliding window
+        val window = config.memory.historyWindow
+        if (history.size > window) history.subList(0, history.size - window).clear()
 
         for (tc in toolCalls) {
             val args = parseArgs(tc.arguments)

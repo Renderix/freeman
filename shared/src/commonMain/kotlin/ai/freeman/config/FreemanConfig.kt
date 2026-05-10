@@ -10,6 +10,7 @@ data class FreemanConfig(
     val stt: STTConfig = STTConfig(),
     val wakeword: WakeWordConfig = WakeWordConfig(),
     val tools: ToolsConfig = ToolsConfig(),
+    val memory: MemoryConfig = MemoryConfig(),
 )
 
 @Serializable
@@ -53,4 +54,10 @@ data class WakeWordConfig(
 @Serializable
 data class ToolsConfig(
     val dirs: List<String> = listOf("./tools"),
+)
+
+@Serializable
+data class MemoryConfig(
+    val historyWindow: Int = 20,   // max recent turns kept in-context per session
+    val recallLimit: Int = 5,      // max past turns retrieved from SQLite per query
 )
