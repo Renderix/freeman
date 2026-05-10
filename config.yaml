@@ -21,6 +21,7 @@ stt:
   modelPath: ./models/moonshine
 
 wakeword:
+  enabled: true         # set false to skip wake word and stay always-on
   modelsDir: ./models/wakeword
   threshold: 0.5
 
@@ -29,6 +30,7 @@ tools:
     - ./tools
 
 memory:
+  enabled: true         # set false to disable SQLite memory entirely
   dbPath: ~/.freeman/memory.db
   historyWindow: 20   # recent turns kept in-context per session
   recallLimit: 5      # past turns retrieved from SQLite per query

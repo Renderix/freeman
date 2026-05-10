@@ -47,6 +47,7 @@ data class STTConfig(
 
 @Serializable
 data class WakeWordConfig(
+    val enabled: Boolean = true,
     val modelsDir: String = "./models/wakeword",
     val threshold: Float = 0.5f,
 )
@@ -58,6 +59,7 @@ data class ToolsConfig(
 
 @Serializable
 data class MemoryConfig(
+    val enabled: Boolean = true,
     val dbPath: String = "~/.freeman/memory.db",
     val historyWindow: Int = 20,   // max recent turns kept in-context per session
     val recallLimit: Int = 5,      // max past turns retrieved from SQLite per query
