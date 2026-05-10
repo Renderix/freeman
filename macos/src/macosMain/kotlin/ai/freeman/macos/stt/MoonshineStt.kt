@@ -28,6 +28,7 @@ class MoonshineStt(modelDir: String) : STT {
                             .setCachedDecoder("$modelDir/cached_decode.int8.onnx")
                             .build()
                     )
+                    .setTokens("$modelDir/tokens.txt")
                     .setNumThreads(2)
                     .build()
             )
