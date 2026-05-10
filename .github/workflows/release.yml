@@ -31,6 +31,8 @@ jobs:
 
           cp macos/build/libs/macos-macos.jar ${DIST}/freeman.jar
           cp config.yaml                      ${DIST}/config.yaml
+          cp setup.sh                         ${DIST}/setup.sh
+          chmod +x ${DIST}/setup.sh
 
           cat > ${DIST}/run.sh <<'EOF'
           #!/bin/bash
