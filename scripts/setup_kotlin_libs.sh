@@ -61,5 +61,25 @@ else
     echo "[sherpa-onnx] Android JNI .so files already present — skipping."
 fi
 
+# ── PortAudio JNI wrapper (libportaudio_jni.dylib) ───────────────────────
+if [ ! -f "$MACOS_LIBS/libportaudio_jni.dylib" ]; then
+    echo "[portaudio-jni] Building libportaudio_jni.dylib…"
+    PA_PREFIX="$(brew --prefix portaudio 2>/dev/null)" || {
+        echo "[portaudio-jni] ERROR: PortAudio not found. Install with: brew install portaudio" >&2
+        exit 1
+    }
+    JAVA_HOME="${JAVA_HOME:-$(java -XshowSettings:all -version 2>&1 | awk '/java.home/{print $3}')}"
+    clang -shared -fPIC -O2 \
+        -I"$PA_PREFIX/include" \
+        -I"$JAVA_HOME/include" \
+        -I"$JAVA_HOME/include/darwin" \
+        -L"$PA_PREFIX/lib" -lportaudio \
+        -o "$MACOS_LIBS/libportaudio_jni.dylib" \
+        "$ROOT/macos/native/libportaudio_jni.c"
+    echo "[portaudio-jni] libportaudio_jni.dylib → macos/libs/"
+else
+    echo "[portaudio-jni] libportaudio_jni.dylib already present — skipping."
+fi
+
 echo ""
 echo "Done. Build with: ./gradlew :macos:macosJar"
