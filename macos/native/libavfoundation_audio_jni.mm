@@ -3,6 +3,10 @@
 #import <stdlib.h>
 #import <string.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 static JavaVM*            jvm        = NULL;
 static jobject            gCallback  = NULL;
 static jmethodID          gOnFrame   = NULL;
@@ -32,7 +36,8 @@ JNIEXPORT jint JNICALL Java_ai_freeman_macos_audio_AVFoundationAudioJNI_startCap
 
     AVAudioInputNode* inputNode = [engine inputNode];
     NSError* err = nil;
-    if (![inputNode setVoiceProcessingEnabled:YES error:&err]) {
+    BOOL vpEnabled = [inputNode setVoiceProcessingEnabled:YES error:&err];
+    if (!vpEnabled) {
         NSLog(@"[AVFoundationJNI] voice processing unavailable: %@", err);
     }
 
@@ -69,16 +74,16 @@ JNIEXPORT jint JNICALL Java_ai_freeman_macos_audio_AVFoundationAudioJNI_startCap
         if (didAttach) jvm->DetachCurrentThread();
     }];
 
-    // Fix 5: clean up on engine start failure
+    err = nil;
     if (![engine startAndReturnError:&err]) {
         NSLog(@"[AVFoundationJNI] engine start failed: %@", err);
         [[engine inputNode] removeTapOnBus:0];
-        engine = nil;
-        playerNode = nil;
+        engine = nil; playerNode = nil;
         env->DeleteGlobalRef(gCallback);
         gCallback = NULL;
         return -1;
     }
+    NSLog(@"[AVFoundationJNI] capture started (AEC=%s)", vpEnabled ? "on" : "off");
     [playerNode play];
     return 0;
 }
@@ -124,3 +129,7 @@ JNIEXPORT void JNICALL Java_ai_freeman_macos_audio_AVFoundationAudioJNI_stopPlay
         JNIEnv* env, jclass cls) {
     if (playerNode) [playerNode stop];
 }
+
+#ifdef __cplusplus
+}
+#endif

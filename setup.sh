@@ -97,7 +97,12 @@ if [[ "$(uname)" == "Darwin" ]] && [ ! -f "$LIBS_PATH/libavfoundation_audio_jni.
   if [ -f "$JNI_SRC" ]; then
     mkdir -p "$LIBS_PATH"
     echo "Building libavfoundation_audio_jni.dylib..."
+    # Use MacOSX15 SDK — newer SDKs (26+) are missing C++ stdlib headers for clang++
+    MACOS_SDK=$(xcrun --sdk macosx15 --show-sdk-path 2>/dev/null || xcrun --show-sdk-path)
+    CXX_INCLUDE="$MACOS_SDK/usr/include/c++/v1"
     clang++ -shared -fPIC -O2 \
+      -isysroot "$MACOS_SDK" \
+      -I"$CXX_INCLUDE" \
       -framework AVFoundation -framework AudioToolbox -framework Foundation \
       -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/darwin" \
       -o "$LIBS_PATH/libavfoundation_audio_jni.dylib" \

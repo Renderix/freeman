@@ -32,7 +32,11 @@ jobs:
         run: |
           JAVA_HOME=$(java -XshowSettings:all -version 2>&1 | awk '/java.home/{print $3}')
           mkdir -p macos/libs
+          MACOS_SDK=$(xcrun --sdk macosx15 --show-sdk-path 2>/dev/null || xcrun --show-sdk-path)
+          CXX_INCLUDE="$MACOS_SDK/usr/include/c++/v1"
           clang++ -shared -fPIC -O2 \
+            -isysroot "$MACOS_SDK" \
+            -I"$CXX_INCLUDE" \
             -framework AVFoundation -framework AudioToolbox -framework Foundation \
             -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/darwin" \
             -o macos/libs/libavfoundation_audio_jni.dylib \

@@ -47,7 +47,7 @@ class ConversationLoop(
         memoryStore?.save(Memory(role = "user", content = text, sessionId = sessionId))
 
         val recalled = memoryStore?.search(text, limit = config.memory.recallLimit) ?: emptyList()
-        val systemPrompt = SystemPrompt.build(config.persona, toolRegistry.tools(), recalled)
+        val systemPrompt = SystemPrompt.build(config.persona, toolRegistry.tools(), recalled, override = config.systemPrompt)
 
         val messages = listOf(Message(role = Role.system, content = systemPrompt)) + history
         val tools = toolRegistry.tools() + builtinTaskTools()

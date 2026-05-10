@@ -5,6 +5,7 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class FreemanConfig(
     val persona: PersonaConfig = PersonaConfig(),
+    val systemPrompt: String? = null,  // inline text that overrides the built-in system-prompt.md
     val llm: LLMConfig = LLMConfig(),
     val tts: TTSConfig = TTSConfig(),
     val stt: STTConfig = STTConfig(),
