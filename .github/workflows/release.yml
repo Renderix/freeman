@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Download native libs
+        run: ./scripts/setup_kotlin_libs.sh
+
+      - name: Build fat JAR
+        run: ./gradlew :macos:macosJar
+
+      - name: Package release zip
+        run: |
+          VERSION=${GITHUB_REF_NAME}
+          DIST=freeman-${VERSION}-macos
+
+          mkdir -p ${DIST}/models
+
+          cp macos/build/libs/macos-macos.jar ${DIST}/freeman.jar
+          cp -r macos/libs                    ${DIST}/libs
+          cp config.yaml                      ${DIST}/config.yaml
+          cp scripts/setup_models.sh          ${DIST}/setup_models.sh
+          chmod +x ${DIST}/setup_models.sh
+
+          cat > ${DIST}/run.sh <<'EOF'
+          #!/bin/bash
+          DIR="$(cd "$(dirname "$0")" && pwd)"
+          java -Djava.library.path="$DIR/libs" -jar "$DIR/freeman.jar" "$DIR/config.yaml"
+          EOF
+          chmod +x ${DIST}/run.sh
+
+          zip -r ${DIST}.zip ${DIST}
+          echo "ASSET=${DIST}.zip" >> $GITHUB_ENV
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ASSET }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

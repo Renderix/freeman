@@ -43,8 +43,9 @@ fun main(args: Array<String>) {
     val toolRegistry = ToolRegistry().apply {
         config.tools.dirs.forEach { loadFromDir(it) }
     }
-    val freemanDir = java.io.File(System.getProperty("user.home") + "/.freeman").also { it.mkdirs() }
-    val memoryStore = SqliteMemoryStore(dbPath = "${freemanDir.absolutePath}/memory.db")
+    val dbPath = config.memory.dbPath.replace("~", System.getProperty("user.home"))
+    java.io.File(dbPath).parentFile?.mkdirs()
+    val memoryStore = SqliteMemoryStore(dbPath = dbPath)
     val loop = ConversationLoop(
         config = config,
         llm = llm,

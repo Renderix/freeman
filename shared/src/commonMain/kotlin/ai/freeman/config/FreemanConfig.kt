@@ -58,6 +58,7 @@ data class ToolsConfig(
 
 @Serializable
 data class MemoryConfig(
+    val dbPath: String = "~/.freeman/memory.db",
     val historyWindow: Int = 20,   // max recent turns kept in-context per session
     val recallLimit: Int = 5,      // max past turns retrieved from SQLite per query
 )
