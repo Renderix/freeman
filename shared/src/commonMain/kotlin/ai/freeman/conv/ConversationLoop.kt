@@ -10,8 +10,11 @@ import ai.freeman.llm.ToolCall
 import ai.freeman.memory.Memory
 import ai.freeman.memory.MemoryStore
 import ai.freeman.tasks.TaskManager
+import ai.freeman.tools.StoredTool
 import ai.freeman.tools.ToolRegistry
 import ai.freeman.tools.ToolRunner
+import ai.freeman.skills.SkillStore
+import ai.freeman.tools.ToolStore
 import ai.freeman.tts.TTS
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
@@ -37,6 +40,8 @@ class ConversationLoop(
     private val taskManager: TaskManager,
     private val toolRegistry: ToolRegistry,
     private val toolRunner: ToolRunner? = null,
+    private val toolStore: ToolStore? = null,
+    private val skillStore: SkillStore? = null,
     private val memoryStore: MemoryStore? = null,
     private val onSpeak: suspend (FloatArray) -> Unit = {},
 ) {
@@ -52,10 +57,11 @@ class ConversationLoop(
         memoryStore?.save(Memory(role = "user", content = text, sessionId = sessionId))
 
         val recalled = memoryStore?.search(text, limit = config.memory.recallLimit) ?: emptyList()
-        val systemPrompt = SystemPrompt.build(config.persona, toolRegistry.tools(), recalled, override = config.systemPrompt)
+        val skills   = skillStore?.search(text, limit = 3) ?: emptyList()
+        val systemPrompt = SystemPrompt.build(config.persona, toolRegistry.tools(), recalled, skills, override = config.systemPrompt)
 
         val messages = listOf(Message(role = Role.system, content = systemPrompt)) + history
-        val tools = toolRegistry.tools() + builtinTaskTools()
+        val tools = toolRegistry.tools() + builtinTaskTools() + builtinDefineToolIfEnabled()
 
         val sentenceChannel = Channel<String>(Channel.UNLIMITED)
         val sentenceBuffer = SentenceBuffer { sentence -> sentenceChannel.trySend(sentence) }
@@ -76,7 +82,7 @@ class ConversationLoop(
                 }
                 audioChannel.close()
             }
-            val playbackJob = launch {
+            val playbackJob = launch(kotlinx.coroutines.Dispatchers.IO) {
                 for (audio in audioChannel) {
                     onSpeak(audio)
                     println("[Freeman] ${ts()} done speaking")
@@ -114,15 +120,47 @@ class ConversationLoop(
                 "start_task"  -> { taskManager.start(args["goal"] ?: ""); "task started" }
                 "cancel_task" -> { taskManager.cancel(args["id"] ?: ""); "task cancelled" }
                 "task_status" -> taskManager.promptSummary()
+                "define_tool" -> handleDefineTool(args)
                 else -> {
-                    val mdTool = toolRegistry.tools().find { it.name == tc.name }
-                    if (mdTool != null && toolRunner != null)
+                    if (toolRunner != null)
                         toolRegistry.dispatch(tc.name, args, toolRunner)
                     else """{"error":"unknown tool ${tc.name}"}"""
                 }
             }
             history.add(Message(role = Role.tool, content = result, toolCallId = tc.id))
         }
+    }
+
+    private fun handleDefineTool(args: Map<String, String>): String {
+        val name        = args["name"]?.trim()        ?: return """{"error":"name required"}"""
+        val description = args["description"]?.trim() ?: return """{"error":"description required"}"""
+        val body        = args["body"]?.trim()        ?: return """{"error":"body required"}"""
+        val paramsJson  = args["params_json"]?.trim() ?: """{"type":"object"}"""
+        val tool = StoredTool(name = name, description = description, paramsJson = paramsJson, body = body)
+        toolStore?.upsert(tool)
+        toolRegistry.register(tool)
+        println("[Freeman] defined tool: $name")
+        return "Tool '$name' saved and available."
+    }
+
+    private fun builtinDefineToolIfEnabled(): List<Tool> {
+        if (toolStore == null) return emptyList()
+        return listOf(Tool(
+            name = "define_tool",
+            description = "Save a new tool the user just described. Write a bash script body; read args from env vars named ARG_<PARAM_UPPERCASE>.",
+            parameters = buildJsonObject {
+                put("type", JsonPrimitive("object"))
+                put("properties", buildJsonObject {
+                    put("name",        buildJsonObject { put("type", JsonPrimitive("string")) })
+                    put("description", buildJsonObject { put("type", JsonPrimitive("string")) })
+                    put("body",        buildJsonObject { put("type", JsonPrimitive("string")) })
+                    put("params_json", buildJsonObject { put("type", JsonPrimitive("string")); put("description", JsonPrimitive("JSON schema for parameters, optional")) })
+                })
+                put("required", kotlinx.serialization.json.buildJsonArray {
+                    add(JsonPrimitive("name")); add(JsonPrimitive("description")); add(JsonPrimitive("body"))
+                })
+            },
+        ))
     }
 
     private fun builtinTaskTools(): List<Tool> = listOf(
