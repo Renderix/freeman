@@ -31,7 +31,7 @@ memory:
   recallLimit: 5        # past turns retrieved from DB per query
 
 tools:
-  dirs: []              # directories containing tool scripts, e.g. [/path/to/my/tools]
+  dirs: []
 
 # Path to sherpa-onnx native libs — used by run.sh to set -Djava.library.path
 # Download: https://github.com/k2-fsa/sherpa-onnx/releases (pick the JVM package for your OS)

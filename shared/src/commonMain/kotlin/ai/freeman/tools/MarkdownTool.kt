@@ -1,10 +1,10 @@
 package ai.freeman.tools
 
 import ai.freeman.llm.Tool
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
 
 data class MarkdownTool(
     val name: String,
@@ -46,10 +46,40 @@ data class MarkdownTool(
         }
 
         private fun parseParameters(yaml: String): JsonObject {
-            return if (yaml.contains("type: object") || yaml.isBlank())
-                buildJsonObject { put("type", "object") }
-            else
-                buildJsonObject { put("type", "object") }
+            // Parse simple two-level YAML: property names at 2-space indent,
+            // their attributes (type, description) at 4-space indent.
+            val properties = mutableMapOf<String, Pair<String, String>>() // name → (type, description)
+            var currentProp: String? = null
+            var currentType = "string"
+            var currentDesc = ""
+            for (line in yaml.lines()) {
+                val prop = Regex("""^  (\w+):\s*$""").find(line)?.groupValues?.get(1)
+                if (prop != null) {
+                    currentProp?.let { properties[it] = Pair(currentType, currentDesc) }
+                    currentProp = prop; currentType = "string"; currentDesc = ""
+                    continue
+                }
+                Regex("""^\s+type:\s*(\S+)""").find(line)?.groupValues?.get(1)?.let { currentType = it }
+                Regex("""^\s+description:\s*(.+)""").find(line)?.groupValues?.get(1)?.trim()?.let { currentDesc = it }
+            }
+            currentProp?.let { properties[it] = Pair(currentType, currentDesc) }
+
+            return buildJsonObject {
+                put("type", "object")
+                if (properties.isNotEmpty()) {
+                    putJsonObject("properties") {
+                        properties.forEach { (name, td) ->
+                            putJsonObject(name) {
+                                put("type", td.first)
+                                if (td.second.isNotBlank()) put("description", td.second)
+                            }
+                        }
+                    }
+                    put("required", kotlinx.serialization.json.buildJsonArray {
+                        properties.keys.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) }
+                    })
+                }
+            }
         }
     }
 }
