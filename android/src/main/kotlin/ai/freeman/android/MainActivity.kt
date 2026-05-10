@@ -6,6 +6,7 @@ import ai.freeman.android.audio.AndroidAudioCapture
 import ai.freeman.android.audio.AudioTrackPlayback
 import ai.freeman.android.llm.LiteRtProvider
 import ai.freeman.android.stt.NoOpStt
+import ai.freeman.android.memory.SqliteMemoryStore
 import ai.freeman.android.tools.AndroidToolRunner
 import ai.freeman.android.tts.AndroidTTSFactory
 import ai.freeman.config.FreemanConfig
@@ -62,6 +63,7 @@ class MainActivity : Activity() {
             config = config, llm = llm, tts = tts,
             taskManager = TaskManager(), toolRegistry = ToolRegistry(),
             toolRunner = AndroidToolRunner(),
+            memoryStore = SqliteMemoryStore(this),
         )
 
         statusLabel.text = config.persona.greeting

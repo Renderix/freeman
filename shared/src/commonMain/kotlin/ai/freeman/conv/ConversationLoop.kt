@@ -7,6 +7,8 @@ import ai.freeman.llm.Message
 import ai.freeman.llm.Role
 import ai.freeman.llm.Tool
 import ai.freeman.llm.ToolCall
+import ai.freeman.memory.Memory
+import ai.freeman.memory.MemoryStore
 import ai.freeman.tasks.TaskManager
 import ai.freeman.tools.ToolRegistry
 import ai.freeman.tools.ToolRunner
@@ -18,6 +20,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import java.util.UUID
 
 class ConversationLoop(
     private val config: FreemanConfig,
@@ -26,9 +29,10 @@ class ConversationLoop(
     private val taskManager: TaskManager,
     private val toolRegistry: ToolRegistry,
     private val toolRunner: ToolRunner? = null,
+    private val memoryStore: MemoryStore? = null,
 ) {
     private val history = mutableListOf<Message>()
-    private val systemPrompt = SystemPrompt.build(config.persona, toolRegistry.tools())
+    private val sessionId = UUID.randomUUID().toString()
 
     suspend fun handleUtterance(text: String) {
         val taskContext = taskManager.promptSummary()
@@ -36,6 +40,10 @@ class ConversationLoop(
             "[background tasks:\n$taskContext]\n\n$text" else text
 
         history.add(Message(role = Role.user, content = userText))
+        memoryStore?.save(Memory(role = "user", content = text, sessionId = sessionId))
+
+        val recalled = memoryStore?.search(text, limit = config.memory.recallLimit) ?: emptyList()
+        val systemPrompt = SystemPrompt.build(config.persona, toolRegistry.tools(), recalled)
 
         val messages = listOf(Message(role = Role.system, content = systemPrompt)) + history
         val tools = toolRegistry.tools() + builtinTaskTools()
@@ -56,8 +64,13 @@ class ConversationLoop(
         val reply = assistantText.toString()
         if (reply.isNotBlank()) {
             history.add(Message(role = Role.assistant, content = reply))
+            memoryStore?.save(Memory(role = "assistant", content = reply, sessionId = sessionId))
             tts.synthesize(reply)
         }
+
+        // Trim in-session history to the sliding window
+        val window = config.memory.historyWindow
+        if (history.size > window) history.subList(0, history.size - window).clear()
 
         for (tc in toolCalls) {
             val args = parseArgs(tc.arguments)

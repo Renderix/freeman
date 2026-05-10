@@ -27,3 +27,7 @@ wakeword:
 tools:
   dirs:
     - ./tools
+
+memory:
+  historyWindow: 20   # recent turns kept in-context per session
+  recallLimit: 5      # past turns retrieved from SQLite per query
