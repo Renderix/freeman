@@ -6,4 +6,5 @@ data class Memory(
     val content: String,
     val sessionId: String,
     val createdAt: Long = System.currentTimeMillis(),
+    val recallCount: Int = 0,
 )

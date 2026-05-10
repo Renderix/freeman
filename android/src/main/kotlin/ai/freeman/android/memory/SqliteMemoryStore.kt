@@ -17,6 +17,7 @@ class SqliteMemoryStore(context: Context) : MemoryStore {
             put("content", memory.content)
             put("session_id", memory.sessionId)
             put("created_at", memory.createdAt)
+            put("recall_count", 0)
         })
     }
 
@@ -24,15 +25,17 @@ class SqliteMemoryStore(context: Context) : MemoryStore {
         if (query.isBlank()) return emptyList()
         val ftsQuery = sanitizeFtsQuery(query)
         if (ftsQuery.isBlank()) return emptyList()
+
         val sql = """
-            SELECT m.id, m.role, m.content, m.session_id, m.created_at
+            SELECT m.id, m.role, m.content, m.session_id, m.created_at, m.recall_count
             FROM memories m
             JOIN memories_fts f ON m.id = f.rowid
             WHERE memories_fts MATCH ?
             ORDER BY bm25(memories_fts)
             LIMIT ?
         """.trimIndent()
-        return db.rawQuery(sql, arrayOf(ftsQuery, limit.toString())).use { cursor ->
+
+        val results = db.rawQuery(sql, arrayOf(ftsQuery, limit.toString())).use { cursor ->
             buildList {
                 while (cursor.moveToNext()) add(
                     Memory(
@@ -41,10 +44,26 @@ class SqliteMemoryStore(context: Context) : MemoryStore {
                         content = cursor.getString(2),
                         sessionId = cursor.getString(3),
                         createdAt = cursor.getLong(4),
+                        recallCount = cursor.getInt(5),
                     )
                 )
             }
         }
+
+        if (results.isNotEmpty()) {
+            val ids = results.joinToString(",") { it.id.toString() }
+            db.execSQL("UPDATE memories SET recall_count = recall_count + 1 WHERE id IN ($ids)")
+        }
+
+        return results
+    }
+
+    override fun prune(olderThanDays: Int, minRecallCount: Int) {
+        val cutoff = System.currentTimeMillis() - olderThanDays.toLong() * 24 * 60 * 60 * 1000
+        db.execSQL(
+            "DELETE FROM memories WHERE created_at < ? AND recall_count < ?",
+            arrayOf(cutoff, minRecallCount)
+        )
     }
 
     override fun close() = db.close()
@@ -55,16 +74,17 @@ class SqliteMemoryStore(context: Context) : MemoryStore {
         }
 
     private class MemoryDbHelper(context: Context) :
-        SQLiteOpenHelper(context, "freeman_memory.db", null, 1) {
+        SQLiteOpenHelper(context, "freeman_memory.db", null, 2) {
 
         override fun onCreate(db: SQLiteDatabase) {
             db.execSQL("""
                 CREATE TABLE memories (
-                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                    role       TEXT    NOT NULL,
-                    content    TEXT    NOT NULL,
-                    session_id TEXT    NOT NULL,
-                    created_at INTEGER NOT NULL
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    role         TEXT    NOT NULL,
+                    content      TEXT    NOT NULL,
+                    session_id   TEXT    NOT NULL,
+                    created_at   INTEGER NOT NULL,
+                    recall_count INTEGER NOT NULL DEFAULT 0
                 )
             """.trimIndent())
             db.execSQL("""
@@ -90,9 +110,9 @@ class SqliteMemoryStore(context: Context) : MemoryStore {
         }
 
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-            db.execSQL("DROP TABLE IF EXISTS memories_fts")
-            db.execSQL("DROP TABLE IF EXISTS memories")
-            onCreate(db)
+            if (oldVersion < 2) {
+                db.execSQL("ALTER TABLE memories ADD COLUMN recall_count INTEGER NOT NULL DEFAULT 0")
+            }
         }
     }
 }
