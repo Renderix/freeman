@@ -16,7 +16,9 @@ import ai.freeman.macos.tts.MacosTTSFactory
 import ai.freeman.tasks.TaskManager
 import ai.freeman.tools.ToolRegistry
 import ai.freeman.wakeword.OnnxWakeWord
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlin.math.abs
@@ -43,7 +45,6 @@ fun main(args: Array<String>) {
         else      -> MoonshineStt(config.stt.modelPath)
     }
 
-    // Wakeword + VAD are optional — skipped when wakeword.enabled = false
     val vad: SileroVAD? = if (config.wakeword.enabled)
         SileroVAD("${config.wakeword.modelsDir}/../silero/silero_vad.onnx") else null
     val wakeWord: OnnxWakeWord? = if (config.wakeword.enabled)
@@ -77,65 +78,97 @@ fun main(args: Array<String>) {
     )
 
     runBlocking {
-        val capture = AVFoundationCapture()
-        // When wakeword is disabled start in listening mode immediately
-        var listening = !config.wakeword.enabled
-        val utteranceBuffer = mutableListOf<FloatArray>()
-        var silenceFrames = 0
-        val silenceThreshold = 500 / AudioFrame.FRAME_MS  // ~16 frames
+        // ── Pipeline channels ────────────────────────────────────────────────
+        // mic frames (512 samples @ 16 kHz = 32 ms each; 128 frames ≈ 4 s buffer)
+        val micChannel       = Channel<FloatArray>(128)
+        // complete utterances ready for STT
+        val utteranceChannel = Channel<FloatArray>(4)
+        // transcribed text ready for LLM
+        val textChannel      = Channel<String>(Channel.UNLIMITED)
 
-        wakeWord?.start {
-            println("[Freeman] Wake word detected — listening...")
-            listening = true; utteranceBuffer.clear(); silenceFrames = 0; vad?.reset()
+        val capture = AVFoundationCapture()
+
+        // ── Stage 1: mic → micChannel ────────────────────────────────────────
+        // AVFoundation callback drops frames rather than blocking the audio thread.
+        capture.start { frame -> micChannel.trySend(frame) }
+
+        // ── Stage 2: micChannel → VAD → utteranceChannel ─────────────────────
+        launch {
+            val silenceThreshold = 500 / AudioFrame.FRAME_MS  // ~16 frames
+            var listening = !config.wakeword.enabled
+            val utteranceBuffer = mutableListOf<FloatArray>()
+            var silenceFrames = 0
+            var voiceActive = false
+            var voiceStartTs = 0L
+
+            // Wake-word callback runs on its own thread; use a conflated channel
+            // to safely signal the VAD coroutine without blocking.
+            val wakeChannel = Channel<Unit>(Channel.CONFLATED)
+            wakeWord?.start {
+                println("[Freeman] Wake word detected — listening...")
+                wakeChannel.trySend(Unit)
+            }
+
+            for (frame in micChannel) {
+                // Drain any pending wake events
+                if (wakeChannel.tryReceive().isSuccess && !listening) {
+                    listening = true; utteranceBuffer.clear(); silenceFrames = 0; vad?.reset()
+                }
+
+                if (wakeWord != null && wakeWord.processFrame(frame) && !listening) {
+                    listening = true; utteranceBuffer.clear(); silenceFrames = 0; vad?.reset()
+                }
+                if (!listening) continue
+
+                val isSpeech = vad?.isSpeech(frame)
+                    ?: (frame.maxOrNull()?.let { abs(it) > 0.04f } == true)
+
+                if (isSpeech) {
+                    if (!voiceActive) {
+                        voiceActive = true
+                        voiceStartTs = System.currentTimeMillis()
+                        println("[Freeman] ${ts()} voice start")
+                    }
+                    silenceFrames = 0
+                    utteranceBuffer.add(frame.copyOf())
+                } else if (voiceActive) {
+                    utteranceBuffer.add(frame.copyOf())
+                    silenceFrames++
+                    if (silenceFrames >= silenceThreshold) {
+                        val durationMs = System.currentTimeMillis() - voiceStartTs
+                        println("[Freeman] ${ts()} voice end (${durationMs}ms) → STT")
+                        voiceActive = false
+                        listening = !config.wakeword.enabled
+                        val audio = FloatArray(utteranceBuffer.sumOf { it.size }).also { out ->
+                            var pos = 0
+                            utteranceBuffer.forEach { f -> f.copyInto(out, pos); pos += f.size }
+                        }
+                        utteranceBuffer.clear()
+                        silenceFrames = 0
+                        utteranceChannel.send(audio)
+                    }
+                }
+            }
         }
 
-        var voiceActive = false
-        var voiceStartTs = 0L
-
-        // Start capture first — this initializes the AVAudioEngine (required before playback)
-        capture.start { frame ->
-            if (wakeWord != null && wakeWord.processFrame(frame) && !listening) {
-                listening = true; utteranceBuffer.clear(); silenceFrames = 0; vad?.reset()
+        // ── Stage 3: utteranceChannel → STT → textChannel ───────────────────
+        launch(Dispatchers.Default) {
+            for (audio in utteranceChannel) {
+                val text = stt.transcribe(audio)
+                if (text.isBlank()) {
+                    println("[Freeman] ${ts()} → listening (blank STT)")
+                } else {
+                    println("[User]    ${ts()} $text")
+                    textChannel.send(text)
+                }
             }
-            if (!listening) return@start
+        }
 
-            // Threshold 0.04 avoids triggering on typical background noise (was 0.02)
-            val isSpeech = vad?.isSpeech(frame) ?: (frame.maxOrNull()?.let { abs(it) > 0.04f } == true)
-
-            if (isSpeech) {
-                if (!voiceActive) {
-                    voiceActive = true
-                    voiceStartTs = System.currentTimeMillis()
-                    println("[Freeman] ${ts()} voice start")
-                }
-                silenceFrames = 0
-                utteranceBuffer.add(frame.copyOf())
-            } else if (voiceActive) {
-                // Only accumulate silence tail and count toward end when speech has started
-                utteranceBuffer.add(frame.copyOf())
-                silenceFrames++
-                if (silenceFrames >= silenceThreshold) {
-                    val durationMs = System.currentTimeMillis() - voiceStartTs
-                    println("[Freeman] ${ts()} voice end (${durationMs}ms) → STT")
-                    voiceActive = false
-                    listening = !config.wakeword.enabled
-                    val audio = FloatArray(utteranceBuffer.sumOf { it.size }).also { out ->
-                        var pos = 0
-                        utteranceBuffer.forEach { f -> f.copyInto(out, pos); pos += f.size }
-                    }
-                    utteranceBuffer.clear()
-                    silenceFrames = 0
-                    launch {
-                        val text = stt.transcribe(audio)
-                        if (text.isBlank()) {
-                            println("[Freeman] ${ts()} → listening (blank STT)")
-                            return@launch
-                        }
-                        println("[User]    ${ts()} $text")
-                        loop.handleUtterance(text)
-                        println("[Freeman] ${ts()} → listening")
-                    }
-                }
+        // ── Stage 4: textChannel → LLM (sequential, one turn at a time) ─────
+        launch {
+            for (text in textChannel) {
+                loop.handleUtterance(text)
+                println("[Freeman] ${ts()} → listening")
             }
         }
 
