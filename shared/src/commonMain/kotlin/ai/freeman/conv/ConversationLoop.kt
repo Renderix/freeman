@@ -59,9 +59,19 @@ class ConversationLoop(
         val toolCalls = mutableListOf<ToolCall>()
 
         coroutineScope {
-            val playbackJob = launch {
+            // Pipeline: synthesis and playback run concurrently so sentence N+1 is
+            // synthesized while sentence N is still playing.
+            val audioChannel = Channel<FloatArray>(2)
+
+            val synthesisJob = launch(kotlinx.coroutines.Dispatchers.Default) {
                 for (sentence in sentenceChannel) {
-                    onSpeak(tts.synthesize(sentence))
+                    audioChannel.send(tts.synthesize(sentence))
+                }
+                audioChannel.close()
+            }
+            val playbackJob = launch {
+                for (audio in audioChannel) {
+                    onSpeak(audio)
                 }
             }
             llm.chat(messages, tools).collect { delta ->
@@ -70,6 +80,7 @@ class ConversationLoop(
             }
             sentenceBuffer.flush()
             sentenceChannel.close()
+            synthesisJob.join()
             playbackJob.join()
         }
 
