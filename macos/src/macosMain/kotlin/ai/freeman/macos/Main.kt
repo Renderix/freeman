@@ -8,6 +8,7 @@ import ai.freeman.macos.audio.PortAudioPlayback
 import ai.freeman.macos.config.ConfigLoader
 import ai.freeman.macos.llm.ClaudeProvider
 import ai.freeman.macos.llm.OllamaProvider
+import ai.freeman.macos.memory.SqliteMemoryStore
 import ai.freeman.macos.stt.MoonshineStt
 import ai.freeman.macos.tools.ProcessToolRunner
 import ai.freeman.macos.tts.MacosTTSFactory
@@ -42,6 +43,8 @@ fun main(args: Array<String>) {
     val toolRegistry = ToolRegistry().apply {
         config.tools.dirs.forEach { loadFromDir(it) }
     }
+    val freemanDir = java.io.File(System.getProperty("user.home") + "/.freeman").also { it.mkdirs() }
+    val memoryStore = SqliteMemoryStore(dbPath = "${freemanDir.absolutePath}/memory.db")
     val loop = ConversationLoop(
         config = config,
         llm = llm,
@@ -49,6 +52,7 @@ fun main(args: Array<String>) {
         taskManager = TaskManager(),
         toolRegistry = toolRegistry,
         toolRunner = ProcessToolRunner(),
+        memoryStore = memoryStore,
     )
 
     runBlocking {
@@ -97,6 +101,7 @@ fun main(args: Array<String>) {
         println("[Freeman] Listening for wake word...")
         Runtime.getRuntime().addShutdownHook(Thread {
             capture.stop()
+            memoryStore.close()
             println("\n[Freeman] ${config.persona.farewell}")
         })
         awaitCancellation()
