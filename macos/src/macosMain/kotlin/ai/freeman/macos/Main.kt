@@ -3,8 +3,8 @@ package ai.freeman.macos
 import ai.freeman.audio.AudioFrame
 import ai.freeman.audio.SileroVAD
 import ai.freeman.conv.ConversationLoop
-import ai.freeman.macos.audio.PortAudioCapture
-import ai.freeman.macos.audio.PortAudioPlayback
+import ai.freeman.macos.audio.AVFoundationCapture
+import ai.freeman.macos.audio.AVFoundationPlayback
 import ai.freeman.macos.config.ConfigLoader
 import ai.freeman.macos.llm.ClaudeProvider
 import ai.freeman.macos.llm.OllamaProvider
@@ -45,7 +45,7 @@ fun main(args: Array<String>) {
             threshold = config.wakeword.threshold,
         ) else null
 
-    val playback = PortAudioPlayback()
+    val playback = AVFoundationPlayback()
     val toolRegistry = ToolRegistry().apply {
         config.tools.dirs.forEach { loadFromDir(it) }
     }
@@ -72,7 +72,7 @@ fun main(args: Array<String>) {
         val greetingPcm = tts.synthesize(config.persona.greeting)
         playback.play(greetingPcm)
 
-        val capture = PortAudioCapture()
+        val capture = AVFoundationCapture()
         // When wakeword is disabled start in listening mode immediately
         var listening = !config.wakeword.enabled
         val utteranceBuffer = mutableListOf<FloatArray>()
