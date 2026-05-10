@@ -12,11 +12,19 @@ import ai.freeman.macos.memory.SqliteMemoryStore
 import ai.freeman.macos.stt.MoonshineStt
 import ai.freeman.macos.stt.WhisperStt
 import ai.freeman.macos.tools.ProcessToolRunner
+import ai.freeman.macos.tools.SqliteToolStore
+import ai.freeman.macos.skills.SqliteSkillStore
+import ai.freeman.tools.MarkdownTool
+import ai.freeman.tools.StoredTool
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.Json as KJson
 import ai.freeman.macos.tts.MacosTTSFactory
 import ai.freeman.tasks.TaskManager
 import ai.freeman.tools.ToolRegistry
 import ai.freeman.wakeword.OnnxWakeWord
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
@@ -56,15 +64,37 @@ fun main(args: Array<String>) {
         ) else null
 
     val playback = AVFoundationPlayback()
-    val toolRegistry = ToolRegistry().apply {
-        config.tools.dirs.forEach { loadFromDir(it) }
+    val toolRegistry = ToolRegistry()
+
+    val dbDir = config.memory.dbPath.replace("~", System.getProperty("user.home"))
+        .let { java.io.File(it).parentFile }
+        .also { it?.mkdirs() }
+
+    val memoryStore = if (config.memory.enabled)
+        SqliteMemoryStore(dbPath = config.memory.dbPath.replace("~", System.getProperty("user.home")))
+    else null
+
+    val toolStore = SqliteToolStore(dbPath = "${dbDir?.absolutePath ?: "."}/tools.db")
+    val skillStore = SqliteSkillStore(dbPath = "${dbDir?.absolutePath ?: "."}/skills.db")
+
+    // Migrate any MD-file tools into SQLite, then they can be removed from dirs
+    config.tools.dirs.forEach { dir ->
+        java.io.File(dir).walkTopDown().filter { it.extension == "md" }.forEach { f ->
+            val md = MarkdownTool.parse(f.readText()) ?: return@forEach
+            val paramsJson = KJson.encodeToString(JsonObject.serializer(), md.toLlmTool().parameters)
+            toolStore.upsert(StoredTool(
+                name           = md.name,
+                description    = md.description,
+                paramsJson     = paramsJson,
+                body           = md.body,
+                runtime        = md.runtime,
+                timeoutSeconds = md.timeoutSeconds,
+            ))
+            println("[Freeman] migrated tool: ${md.name}")
+        }
     }
 
-    val memoryStore = if (config.memory.enabled) {
-        val dbPath = config.memory.dbPath.replace("~", System.getProperty("user.home"))
-        java.io.File(dbPath).parentFile?.mkdirs()
-        SqliteMemoryStore(dbPath = dbPath)
-    } else null
+    toolRegistry.loadFromStore(toolStore)
 
     val loop = ConversationLoop(
         config = config,
@@ -73,6 +103,8 @@ fun main(args: Array<String>) {
         taskManager = TaskManager(),
         toolRegistry = toolRegistry,
         toolRunner = ProcessToolRunner(),
+        toolStore = toolStore,
+        skillStore = skillStore,
         memoryStore = memoryStore,
         onSpeak = { audio -> playback.play(audio) },
     )
@@ -81,10 +113,14 @@ fun main(args: Array<String>) {
         // ── Pipeline channels ────────────────────────────────────────────────
         // mic frames (512 samples @ 16 kHz = 32 ms each; 128 frames ≈ 4 s buffer)
         val micChannel       = Channel<FloatArray>(128)
-        // complete utterances ready for STT
-        val utteranceChannel = Channel<FloatArray>(4)
+        // complete utterances ready for STT: audio + voiced duration in ms
+        val utteranceChannel = Channel<Pair<FloatArray, Long>>(4)
         // transcribed text ready for LLM
         val textChannel      = Channel<String>(Channel.UNLIMITED)
+
+        // ── Barge-in state ───────────────────────────────────────────────────
+        val userIsSpeaking = AtomicBoolean(false)
+        var currentTurnJob: Job? = null
 
         val capture = AVFoundationCapture()
 
@@ -100,10 +136,14 @@ fun main(args: Array<String>) {
             val shortSilence = 480  / AudioFrame.FRAME_MS  // ~15 frames
             val longSilence  = 1000 / AudioFrame.FRAME_MS  // ~31 frames
             val substantialSpeechMs = 1500
+            val minVoicedMs = 96    // ignore bursts with < 3 voiced frames (single-frame spikes)
+            val minBargeInMs = 200  // require 200ms of voiced frames before interrupting Freeman
             var listening = !config.wakeword.enabled
             val utteranceBuffer = mutableListOf<FloatArray>()
             var silenceFrames = 0
+            var voicedFrames = 0  // frames where VAD said isSpeech, excluding silence tail
             var voiceActive = false
+            var bargedIn = false
             var voiceStartTs = 0L
 
             // Wake-word callback runs on its own thread; use a conflated channel
@@ -126,16 +166,29 @@ fun main(args: Array<String>) {
                 if (!listening) continue
 
                 val isSpeech = vad?.isSpeech(frame)
-                    ?: (frame.maxOrNull()?.let { abs(it) > 0.04f } == true)
+                    ?: (frame.maxOrNull()?.let { abs(it) > 0.02f } == true)
 
                 if (isSpeech) {
                     if (!voiceActive) {
                         voiceActive = true
+                        bargedIn = false
                         voiceStartTs = System.currentTimeMillis()
+                        userIsSpeaking.set(true)
                         println("[Freeman] ${ts()} voice start")
                     }
                     silenceFrames = 0
+                    voicedFrames++
                     utteranceBuffer.add(frame.copyOf())
+                    // Barge-in only after enough real speech to rule out noise
+                    if (!bargedIn && voicedFrames * AudioFrame.FRAME_MS >= minBargeInMs) {
+                        val turnJob = currentTurnJob
+                        if (turnJob != null && turnJob.isActive) {
+                            bargedIn = true
+                            println("[Freeman] ${ts()} barge-in")
+                            playback.stop()
+                            turnJob.cancel()
+                        }
+                    }
                 } else if (voiceActive) {
                     utteranceBuffer.add(frame.copyOf())
                     silenceFrames++
@@ -143,16 +196,27 @@ fun main(args: Array<String>) {
                     val threshold = if (spokenMs >= substantialSpeechMs) shortSilence else longSilence
                     if (silenceFrames >= threshold) {
                         val durationMs = System.currentTimeMillis() - voiceStartTs
-                        println("[Freeman] ${ts()} voice end (${durationMs}ms) → STT")
+                        val voicedMs = voicedFrames * AudioFrame.FRAME_MS
                         voiceActive = false
+                        bargedIn = false
+                        userIsSpeaking.set(false)
                         listening = !config.wakeword.enabled
-                        val audio = FloatArray(utteranceBuffer.sumOf { it.size }).also { out ->
-                            var pos = 0
-                            utteranceBuffer.forEach { f -> f.copyInto(out, pos); pos += f.size }
+                        val savedVoicedMs = voicedMs.toLong()
+                        voicedFrames = 0
+                        if (voicedMs < minVoicedMs) {
+                            println("[Freeman] ${ts()} voice end (${durationMs}ms, ${voicedMs}ms voiced) → noise, skip")
+                            utteranceBuffer.clear()
+                            silenceFrames = 0
+                        } else {
+                            println("[Freeman] ${ts()} voice end (${durationMs}ms, ${voicedMs}ms voiced) → STT")
+                            val audio = FloatArray(utteranceBuffer.sumOf { it.size }).also { out ->
+                                var pos = 0
+                                utteranceBuffer.forEach { f -> f.copyInto(out, pos); pos += f.size }
+                            }
+                            utteranceBuffer.clear()
+                            silenceFrames = 0
+                            utteranceChannel.send(Pair(audio, savedVoicedMs))
                         }
-                        utteranceBuffer.clear()
-                        silenceFrames = 0
-                        utteranceChannel.send(audio)
                     }
                 }
             }
@@ -160,13 +224,25 @@ fun main(args: Array<String>) {
 
         // ── Stage 3: utteranceChannel → STT → textChannel ───────────────────
         launch(Dispatchers.Default) {
-            for (audio in utteranceChannel) {
+            for ((audio, voicedMs) in utteranceChannel) {
                 val text = stt.transcribe(audio)
-                if (text.isBlank()) {
-                    println("[Freeman] ${ts()} → listening (blank STT)")
-                } else {
-                    println("[User]    ${ts()} $text")
-                    textChannel.send(text)
+                val isWhisperToken = text.startsWith("[") || (text.startsWith("(") && text.endsWith(")"))
+                when {
+                    text.isBlank() || isWhisperToken -> {
+                        if (voicedMs >= 800) {
+                            println("[Freeman] ${ts()} → LLM (inaudible, ${voicedMs}ms)")
+                            textChannel.send("[inaudible]")
+                        } else {
+                            println("[Freeman] ${ts()} → listening (blank STT)")
+                        }
+                    }
+                    text.trim().split(Regex("\\s+")).size == 1 -> {
+                        println("[Freeman] ${ts()} → listening (single word: $text)")
+                    }
+                    else -> {
+                        println("[User]    ${ts()} $text")
+                        textChannel.send(text)
+                    }
                 }
             }
         }
@@ -174,8 +250,11 @@ fun main(args: Array<String>) {
         // ── Stage 4: textChannel → LLM (sequential, one turn at a time) ─────
         launch {
             for (text in textChannel) {
-                loop.handleUtterance(text)
-                println("[Freeman] ${ts()} → listening")
+                val job = launch { loop.handleUtterance(text) }
+                currentTurnJob = job
+                job.join()
+                currentTurnJob = null
+                if (!job.isCancelled) println("[Freeman] ${ts()} → listening")
             }
         }
 
@@ -192,6 +271,8 @@ fun main(args: Array<String>) {
         Runtime.getRuntime().addShutdownHook(Thread {
             capture.stop()
             memoryStore?.close()
+            toolStore.close()
+            skillStore.close()
             println("\n[Freeman] ${config.persona.farewell}")
         })
         awaitCancellation()
