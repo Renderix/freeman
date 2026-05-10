@@ -14,6 +14,7 @@ import ai.freeman.tools.StoredTool
 import ai.freeman.tools.ToolRegistry
 import ai.freeman.tools.ToolRunner
 import ai.freeman.skills.SkillStore
+import ai.freeman.skills.StoredSkill
 import ai.freeman.tools.ToolStore
 import ai.freeman.tts.TTS
 import kotlinx.coroutines.channels.Channel
@@ -61,7 +62,7 @@ class ConversationLoop(
         val systemPrompt = SystemPrompt.build(config.persona, toolRegistry.tools(), recalled, skills, override = config.systemPrompt)
 
         val messages = listOf(Message(role = Role.system, content = systemPrompt)) + history
-        val tools = toolRegistry.tools() + builtinTaskTools() + builtinDefineToolIfEnabled()
+        val tools = toolRegistry.tools() + builtinTaskTools() + builtinDefineToolIfEnabled() + builtinDefineSkillIfEnabled()
 
         val sentenceChannel = Channel<String>(Channel.UNLIMITED)
         val sentenceBuffer = SentenceBuffer { sentence -> sentenceChannel.trySend(sentence) }
@@ -120,7 +121,8 @@ class ConversationLoop(
                 "start_task"  -> { taskManager.start(args["goal"] ?: ""); "task started" }
                 "cancel_task" -> { taskManager.cancel(args["id"] ?: ""); "task cancelled" }
                 "task_status" -> taskManager.promptSummary()
-                "define_tool" -> handleDefineTool(args)
+                "define_tool"  -> handleDefineTool(args)
+                "define_skill" -> handleDefineSkill(args)
                 else -> {
                     if (toolRunner != null)
                         toolRegistry.dispatch(tc.name, args, toolRunner)
@@ -141,6 +143,35 @@ class ConversationLoop(
         toolRegistry.register(tool)
         println("[Freeman] defined tool: $name")
         return "Tool '$name' saved and available."
+    }
+
+    private fun handleDefineSkill(args: Map<String, String>): String {
+        val name         = args["name"]?.trim()         ?: return """{"error":"name required"}"""
+        val trigger      = args["trigger"]?.trim()      ?: return """{"error":"trigger required"}"""
+        val instructions = args["instructions"]?.trim() ?: return """{"error":"instructions required"}"""
+        val skill = StoredSkill(name = name, trigger = trigger, instructions = instructions)
+        skillStore?.upsert(skill)
+        println("[Freeman] defined skill: $name")
+        return "Skill '$name' saved."
+    }
+
+    private fun builtinDefineSkillIfEnabled(): List<Tool> {
+        if (skillStore == null) return emptyList()
+        return listOf(Tool(
+            name = "define_skill",
+            description = "Save a new skill the user just described — a procedure for how to handle a type of situation. Use when the user says 'when X happens, do Y' or teaches you a new approach.",
+            parameters = buildJsonObject {
+                put("type", JsonPrimitive("object"))
+                put("properties", buildJsonObject {
+                    put("name",         buildJsonObject { put("type", JsonPrimitive("string")); put("description", JsonPrimitive("snake_case skill name")) })
+                    put("trigger",      buildJsonObject { put("type", JsonPrimitive("string")); put("description", JsonPrimitive("when to apply this skill, e.g. 'when user asks to research a topic'")) })
+                    put("instructions", buildJsonObject { put("type", JsonPrimitive("string")); put("description", JsonPrimitive("what to do, step by step")) })
+                })
+                put("required", kotlinx.serialization.json.buildJsonArray {
+                    add(JsonPrimitive("name")); add(JsonPrimitive("trigger")); add(JsonPrimitive("instructions"))
+                })
+            },
+        ))
     }
 
     private fun builtinDefineToolIfEnabled(): List<Tool> {
