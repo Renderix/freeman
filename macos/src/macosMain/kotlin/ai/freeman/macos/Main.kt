@@ -94,7 +94,12 @@ fun main(args: Array<String>) {
 
         // ── Stage 2: micChannel → VAD → utteranceChannel ─────────────────────
         launch {
-            val silenceThreshold = 500 / AudioFrame.FRAME_MS  // ~16 frames
+            // Two-tier end-of-utterance detection:
+            //   short silence (480 ms) only fires after substantial speech (≥1500 ms)
+            //   long  silence (1000 ms) always fires — catches short commands too
+            val shortSilence = 480  / AudioFrame.FRAME_MS  // ~15 frames
+            val longSilence  = 1000 / AudioFrame.FRAME_MS  // ~31 frames
+            val substantialSpeechMs = 1500
             var listening = !config.wakeword.enabled
             val utteranceBuffer = mutableListOf<FloatArray>()
             var silenceFrames = 0
@@ -134,7 +139,9 @@ fun main(args: Array<String>) {
                 } else if (voiceActive) {
                     utteranceBuffer.add(frame.copyOf())
                     silenceFrames++
-                    if (silenceFrames >= silenceThreshold) {
+                    val spokenMs = System.currentTimeMillis() - voiceStartTs
+                    val threshold = if (spokenMs >= substantialSpeechMs) shortSilence else longSilence
+                    if (silenceFrames >= threshold) {
                         val durationMs = System.currentTimeMillis() - voiceStartTs
                         println("[Freeman] ${ts()} voice end (${durationMs}ms) → STT")
                         voiceActive = false
