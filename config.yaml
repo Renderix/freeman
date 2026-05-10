@@ -2,35 +2,39 @@ persona:
   name: Freeman
   greeting: "Hey, I'm Freeman. What can I do for you?"
   farewell: "Catch you later."
+  rules: []             # e.g. ["Keep replies under 3 sentences.", "Always respond in English."]
 
 llm:
-  provider: ollama          # ollama | claude
-  model: gemma4:e4b         # ollama model name  — or claude-sonnet-4-6 / claude-opus-4-7
+  provider: ollama      # ollama | claude
+  model: gemma4:e4b     # ollama model name — or claude-sonnet-4-6 / claude-opus-4-7
   baseUrl: http://localhost:11434
-  numCtx: 8192              # ollama: context window size (tokens)
-  keepAlive: "-1"           # ollama: keep model loaded forever (-1 = never unload)
-  # apiKey: sk-ant-...      # claude: or set ANTHROPIC_API_KEY env var
+  numCtx: 8192          # ollama: context window size (tokens)
+  keepAlive: "-1"       # ollama: keep model loaded forever
+  # apiKey: sk-ant-...  # claude: or set ANTHROPIC_API_KEY env var
 
 tts:
-  modelPath: ./models/kokoro
+  modelPath: /path/to/kokoro   # download: https://github.com/k2-fsa/sherpa-onnx/releases
   voice: bm_george
   speed: 1.0
 
 stt:
   enabled: true
-  modelPath: ./models/moonshine
+  modelPath: /path/to/moonshine  # download: https://github.com/k2-fsa/sherpa-onnx/releases
 
 wakeword:
-  enabled: true         # set false to skip wake word and stay always-on
-  modelsDir: ./models/wakeword
+  enabled: false        # set true if you have OpenWakeWord models
+  modelsDir: /path/to/wakeword/models
   threshold: 0.5
 
-tools:
-  dirs:
-    - ./tools
-
 memory:
-  enabled: true         # set false to disable SQLite memory entirely
+  enabled: true         # set false to run stateless (no SQLite)
   dbPath: ~/.freeman/memory.db
-  historyWindow: 20   # recent turns kept in-context per session
-  recallLimit: 5      # past turns retrieved from SQLite per query
+  historyWindow: 20     # recent turns kept in-context per session
+  recallLimit: 5        # past turns retrieved from DB per query
+
+tools:
+  dirs: []              # directories containing tool scripts, e.g. [/path/to/my/tools]
+
+# Path to sherpa-onnx native libs — used by run.sh to set -Djava.library.path
+# Download: https://github.com/k2-fsa/sherpa-onnx/releases (pick the JVM package for your OS)
+libsPath: /path/to/sherpa-onnx/libs

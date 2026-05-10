@@ -27,18 +27,21 @@ jobs:
           VERSION=${GITHUB_REF_NAME}
           DIST=freeman-${VERSION}-macos
 
-          mkdir -p ${DIST}/models
+          mkdir -p ${DIST}
 
           cp macos/build/libs/macos-macos.jar ${DIST}/freeman.jar
-          cp -r macos/libs                    ${DIST}/libs
           cp config.yaml                      ${DIST}/config.yaml
-          cp scripts/setup_models.sh          ${DIST}/setup_models.sh
-          chmod +x ${DIST}/setup_models.sh
 
           cat > ${DIST}/run.sh <<'EOF'
           #!/bin/bash
           DIR="$(cd "$(dirname "$0")" && pwd)"
-          java -Djava.library.path="$DIR/libs" -jar "$DIR/freeman.jar" "$DIR/config.yaml"
+          CONFIG="${1:-$DIR/config.yaml}"
+          LIBS=$(grep 'libsPath:' "$CONFIG" | sed 's/.*libsPath: *//' | tr -d '"' | xargs)
+          if [ -z "$LIBS" ]; then
+            echo "[Freeman] libsPath not set in $CONFIG — set it to your sherpa-onnx libs directory"
+            exit 1
+          fi
+          java -Djava.library.path="$LIBS" -jar "$DIR/freeman.jar" "$CONFIG"
           EOF
           chmod +x ${DIST}/run.sh
 
