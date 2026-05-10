@@ -44,29 +44,29 @@ class OllamaProvider(private val config: LLMConfig) : LLMProvider {
             setBody(body)
         }
 
-        val buf = StringBuilder()
-        response.bodyAsChannel().let { channel ->
-            while (!channel.isClosedForRead) {
-                val line = channel.readUTF8Line() ?: break
-                if (line.isBlank()) continue
-                buf.append(line)
-                runCatching {
-                    val chunk = json.decodeFromString<OllamaChunk>(buf.toString())
-                    buf.clear()
-                    val toolCalls = chunk.message?.tool_calls
-                    val content = chunk.message?.content
-                    when {
-                        toolCalls != null && toolCalls.isNotEmpty() -> toolCalls.forEach { tc ->
-                            emit(Delta(toolCall = ToolCall(
-                                id = tc.id ?: java.util.UUID.randomUUID().toString(),
-                                name = tc.function.name,
-                                arguments = json.encodeToString(JsonObject.serializer(), tc.function.arguments),
-                            )))
-                        }
-                        content != null -> emit(Delta(text = content))
+        val channel = response.bodyAsChannel()
+        while (!channel.isClosedForRead) {
+            val line = channel.readUTF8Line() ?: break
+            if (line.isBlank()) continue
+            try {
+                val chunk = json.decodeFromString<OllamaChunk>(line)
+                val toolCalls = chunk.message?.tool_calls
+                val content = chunk.message?.content
+                when {
+                    toolCalls != null && toolCalls.isNotEmpty() -> toolCalls.forEach { tc ->
+                        emit(Delta(toolCall = ToolCall(
+                            id = tc.id ?: java.util.UUID.randomUUID().toString(),
+                            name = tc.function.name,
+                            arguments = json.encodeToString(JsonObject.serializer(), tc.function.arguments),
+                        )))
                     }
-                    if (chunk.done) emit(Delta(done = true))
+                    content != null -> emit(Delta(text = content))
                 }
+                if (chunk.done) emit(Delta(done = true))
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // skip malformed lines
             }
         }
     }
