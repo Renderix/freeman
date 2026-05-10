@@ -20,6 +20,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlin.math.abs
 
+private fun ts(): String {
+    val t = java.time.LocalTime.now()
+    return "%02d:%02d:%02d.%03d".format(t.hour, t.minute, t.second, t.nano / 1_000_000)
+}
+
 fun main(args: Array<String>) {
     val configPath = args.firstOrNull() ?: "config.yaml"
     val config = ConfigLoader.load(configPath)
@@ -80,6 +85,9 @@ fun main(args: Array<String>) {
             listening = true; utteranceBuffer.clear(); silenceFrames = 0; vad?.reset()
         }
 
+        var voiceActive = false
+        var voiceStartTs = 0L
+
         // Start capture first — this initializes the AVAudioEngine (required before playback)
         capture.start { frame ->
             if (wakeWord != null && wakeWord.processFrame(frame) && !listening) {
@@ -88,13 +96,20 @@ fun main(args: Array<String>) {
             if (!listening) return@start
 
             utteranceBuffer.add(frame.copyOf())
-            // Use VAD when available; fall back to amplitude threshold
             val isSpeech = vad?.isSpeech(frame) ?: (frame.maxOrNull()?.let { abs(it) > 0.02f } == true)
-            if (isSpeech) silenceFrames = 0
-            else {
+            if (isSpeech) {
+                if (!voiceActive) {
+                    voiceActive = true
+                    voiceStartTs = System.currentTimeMillis()
+                    println("[Freeman] ${ts()} voice start")
+                }
+                silenceFrames = 0
+            } else {
                 silenceFrames++
                 if (silenceFrames >= silenceThreshold && utteranceBuffer.isNotEmpty()) {
-                    // If no wakeword, stay in listening mode after processing
+                    val durationMs = System.currentTimeMillis() - voiceStartTs
+                    println("[Freeman] ${ts()} voice end (${durationMs}ms) → STT")
+                    voiceActive = false
                     listening = !config.wakeword.enabled
                     val audio = FloatArray(utteranceBuffer.sumOf { it.size }).also { out ->
                         var pos = 0
@@ -104,9 +119,13 @@ fun main(args: Array<String>) {
                     silenceFrames = 0
                     launch {
                         val text = stt.transcribe(audio)
-                        if (text.isBlank()) return@launch
-                        println("[User] $text")
+                        if (text.isBlank()) {
+                            println("[Freeman] ${ts()} → listening (blank STT)")
+                            return@launch
+                        }
+                        println("[User]    ${ts()} $text")
                         loop.handleUtterance(text)
+                        println("[Freeman] ${ts()} → listening")
                     }
                 }
             }

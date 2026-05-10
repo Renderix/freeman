@@ -25,6 +25,11 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.util.UUID
 
+private fun ts(): String {
+    val t = java.time.LocalTime.now()
+    return "%02d:%02d:%02d.%03d".format(t.hour, t.minute, t.second, t.nano / 1_000_000)
+}
+
 class ConversationLoop(
     private val config: FreemanConfig,
     private val llm: LLMProvider,
@@ -58,23 +63,31 @@ class ConversationLoop(
         val assistantText = StringBuilder()
         val toolCalls = mutableListOf<ToolCall>()
 
+        println("[Freeman] ${ts()} → LLM")
         coroutineScope {
-            // Pipeline: synthesis and playback run concurrently so sentence N+1 is
-            // synthesized while sentence N is still playing.
             val audioChannel = Channel<FloatArray>(2)
 
             val synthesisJob = launch(kotlinx.coroutines.Dispatchers.Default) {
                 for (sentence in sentenceChannel) {
-                    audioChannel.send(tts.synthesize(sentence))
+                    println("[Freeman] ${ts()} synth: \"${sentence.take(60)}\"")
+                    val audio = tts.synthesize(sentence)
+                    println("[Freeman] ${ts()} play")
+                    audioChannel.send(audio)
                 }
                 audioChannel.close()
             }
             val playbackJob = launch {
                 for (audio in audioChannel) {
                     onSpeak(audio)
+                    println("[Freeman] ${ts()} done speaking")
                 }
             }
+            var firstToken = true
             llm.chat(messages, tools).collect { delta ->
+                if (firstToken && delta.text != null) {
+                    println("[Freeman] ${ts()} ← LLM first token")
+                    firstToken = false
+                }
                 delta.text?.let { assistantText.append(it); sentenceBuffer.append(it) }
                 delta.toolCall?.let { toolCalls.add(it) }
             }
@@ -86,6 +99,7 @@ class ConversationLoop(
 
         val reply = assistantText.toString()
         if (reply.isNotBlank()) {
+            println("[Freeman] ${ts()} ← LLM done: \"${reply.take(80)}\"")
             history.add(Message(role = Role.assistant, content = reply))
             memoryStore?.save(Memory(role = "assistant", content = reply, sessionId = sessionId))
         }
