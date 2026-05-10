@@ -95,8 +95,9 @@ fun main(args: Array<String>) {
             }
             if (!listening) return@start
 
-            utteranceBuffer.add(frame.copyOf())
-            val isSpeech = vad?.isSpeech(frame) ?: (frame.maxOrNull()?.let { abs(it) > 0.02f } == true)
+            // Threshold 0.04 avoids triggering on typical background noise (was 0.02)
+            val isSpeech = vad?.isSpeech(frame) ?: (frame.maxOrNull()?.let { abs(it) > 0.04f } == true)
+
             if (isSpeech) {
                 if (!voiceActive) {
                     voiceActive = true
@@ -104,9 +105,12 @@ fun main(args: Array<String>) {
                     println("[Freeman] ${ts()} voice start")
                 }
                 silenceFrames = 0
-            } else {
+                utteranceBuffer.add(frame.copyOf())
+            } else if (voiceActive) {
+                // Only accumulate silence tail and count toward end when speech has started
+                utteranceBuffer.add(frame.copyOf())
                 silenceFrames++
-                if (silenceFrames >= silenceThreshold && utteranceBuffer.isNotEmpty()) {
+                if (silenceFrames >= silenceThreshold) {
                     val durationMs = System.currentTimeMillis() - voiceStartTs
                     println("[Freeman] ${ts()} voice end (${durationMs}ms) → STT")
                     voiceActive = false
