@@ -21,14 +21,21 @@ class SentenceBuffer(private val onSentence: (String) -> Unit) {
 
     private fun tryFlush() {
         val s = buf.toString()
-        val lastChar = s.trimEnd().lastOrNull() ?: return
 
-        if (lastChar in SENTENCE_END) {
-            onSentence(s)
+        // Flush up to the first sentence-end found anywhere in the buffer,
+        // then recurse to catch additional complete sentences in the remainder.
+        val sentEnd = s.indexOfFirst { it in SENTENCE_END }
+        if (sentEnd >= 0) {
+            val chunk = s.substring(0, sentEnd + 1)
+            if (chunk.isNotBlank()) onSentence(chunk)
             buf.clear()
+            buf.append(s.substring(sentEnd + 1))
+            tryFlush()
             return
         }
 
+        // No sentence-end yet — flush on a clause break if buffer is long enough.
+        val lastChar = s.trimEnd().lastOrNull() ?: return
         if (lastChar in CLAUSE_BREAK && s.length >= EARLY_FLUSH_MIN_LEN) {
             onSentence(s)
             buf.clear()
