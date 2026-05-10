@@ -68,10 +68,6 @@ fun main(args: Array<String>) {
     )
 
     runBlocking {
-        println("[Freeman] ${config.persona.greeting}")
-        val greetingPcm = tts.synthesize(config.persona.greeting)
-        playback.play(greetingPcm)
-
         val capture = AVFoundationCapture()
         // When wakeword is disabled start in listening mode immediately
         var listening = !config.wakeword.enabled
@@ -84,6 +80,7 @@ fun main(args: Array<String>) {
             listening = true; utteranceBuffer.clear(); silenceFrames = 0; vad?.reset()
         }
 
+        // Start capture first — this initializes the AVAudioEngine (required before playback)
         capture.start { frame ->
             if (wakeWord != null && wakeWord.processFrame(frame) && !listening) {
                 listening = true; utteranceBuffer.clear(); silenceFrames = 0; vad?.reset()
@@ -114,6 +111,11 @@ fun main(args: Array<String>) {
                 }
             }
         }
+
+        // Play greeting after capture.start() so AVAudioEngine is initialized
+        println("[Freeman] ${config.persona.greeting}")
+        val greetingPcm = tts.synthesize(config.persona.greeting)
+        playback.play(greetingPcm)
 
         if (config.wakeword.enabled)
             println("[Freeman] Listening for wake word...")
