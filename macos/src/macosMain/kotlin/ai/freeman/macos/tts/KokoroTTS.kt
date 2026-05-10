@@ -36,6 +36,7 @@ class KokoroTTS(
         val modelConfig = OfflineTtsModelConfig.builder()
             .setKokoro(kokoroConfig)
             .setNumThreads(2)
+            .setDebug(false)
             .build()
         tts = OfflineTts(
             OfflineTtsConfig.builder()

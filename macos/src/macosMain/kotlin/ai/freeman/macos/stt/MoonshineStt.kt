@@ -30,6 +30,7 @@ class MoonshineStt(modelDir: String) : STT {
                     )
                     .setTokens("$modelDir/tokens.txt")
                     .setNumThreads(2)
+                    .setDebug(false)
                     .build()
             )
             .build()
