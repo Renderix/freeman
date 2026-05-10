@@ -39,6 +39,21 @@ else
     echo "[moonshine] Already present — skipping."
 fi
 
+# ── Whisper Small STT ─────────────────────────────────────────────────────
+WHISPER_DIR="$MODELS/whisper-small"
+if [ ! -f "$WHISPER_DIR/encoder.int8.onnx" ]; then
+    echo "[whisper] Downloading Whisper small.en ONNX…"
+    mkdir -p "$WHISPER_DIR"
+    curl -fL "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-small.en.tar.bz2" \
+         -o /tmp/whisper.tar.bz2
+    tar -xjf /tmp/whisper.tar.bz2 -C /tmp
+    cp -r /tmp/sherpa-onnx-whisper-small.en/. "$WHISPER_DIR/"
+    rm -f /tmp/whisper.tar.bz2
+    echo "[whisper] → models/whisper-small/"
+else
+    echo "[whisper] Already present — skipping."
+fi
+
 # ── Silero VAD ─────────────────────────────────────────────────────────────
 SILERO_DIR="$MODELS/silero"
 if [ ! -f "$SILERO_DIR/silero_vad.onnx" ]; then

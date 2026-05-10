@@ -43,6 +43,7 @@ data class TTSConfig(
 @Serializable
 data class STTConfig(
     val enabled: Boolean = true,
+    val provider: String = "moonshine",
     val modelPath: String = "./models/moonshine",
 )
 

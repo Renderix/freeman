@@ -10,6 +10,7 @@ import ai.freeman.macos.llm.ClaudeProvider
 import ai.freeman.macos.llm.OllamaProvider
 import ai.freeman.macos.memory.SqliteMemoryStore
 import ai.freeman.macos.stt.MoonshineStt
+import ai.freeman.macos.stt.WhisperStt
 import ai.freeman.macos.tools.ProcessToolRunner
 import ai.freeman.macos.tts.MacosTTSFactory
 import ai.freeman.tasks.TaskManager
@@ -37,7 +38,10 @@ fun main(args: Array<String>) {
         else     -> OllamaProvider(config.llm)
     }
     val tts = MacosTTSFactory.create(config.tts)
-    val stt = MoonshineStt(config.stt.modelPath)
+    val stt = when (config.stt.provider) {
+        "whisper" -> WhisperStt(config.stt.modelPath)
+        else      -> MoonshineStt(config.stt.modelPath)
+    }
 
     // Wakeword + VAD are optional — skipped when wakeword.enabled = false
     val vad: SileroVAD? = if (config.wakeword.enabled)

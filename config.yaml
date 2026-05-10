@@ -16,7 +16,8 @@ tts:
 
 stt:
   enabled: true
-  modelPath: /Users/ayusman/hale/freeman/models/moonshine
+  provider: whisper
+  modelPath: /Users/ayusman/hale/freeman/models/whisper-small
 
 wakeword:
   enabled: false        # set true if you have OpenWakeWord models
