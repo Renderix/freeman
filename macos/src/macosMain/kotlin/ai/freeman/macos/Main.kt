@@ -64,6 +64,7 @@ fun main(args: Array<String>) {
         toolRegistry = toolRegistry,
         toolRunner = ProcessToolRunner(),
         memoryStore = memoryStore,
+        onSpeak = { audio -> playback.play(audio) },
     )
 
     runBlocking {

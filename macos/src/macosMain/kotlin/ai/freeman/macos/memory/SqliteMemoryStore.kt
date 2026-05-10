@@ -117,7 +117,7 @@ class SqliteMemoryStore(dbPath: String) : MemoryStore {
     override fun close() = conn.close()
 
     private fun sanitizeFtsQuery(q: String): String =
-        q.replace(Regex("[\"*^()]"), "").trim().let { clean ->
+        q.replace(Regex("[^\\w\\s]"), "").trim().let { clean ->
             if (clean.isBlank()) "" else clean.split(Regex("\\s+")).joinToString(" OR ")
         }
 }

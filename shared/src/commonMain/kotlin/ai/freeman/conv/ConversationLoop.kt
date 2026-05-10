@@ -13,7 +13,10 @@ import ai.freeman.tasks.TaskManager
 import ai.freeman.tools.ToolRegistry
 import ai.freeman.tools.ToolRunner
 import ai.freeman.tts.TTS
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -30,6 +33,7 @@ class ConversationLoop(
     private val toolRegistry: ToolRegistry,
     private val toolRunner: ToolRunner? = null,
     private val memoryStore: MemoryStore? = null,
+    private val onSpeak: suspend (FloatArray) -> Unit = {},
 ) {
     private val history = mutableListOf<Message>()
     private val sessionId = UUID.randomUUID().toString()
@@ -48,24 +52,31 @@ class ConversationLoop(
         val messages = listOf(Message(role = Role.system, content = systemPrompt)) + history
         val tools = toolRegistry.tools() + builtinTaskTools()
 
-        val sentenceBuffer = SentenceBuffer { sentence ->
-            // Caller owns playback — sentence chunks emitted here
-        }
+        val sentenceChannel = Channel<String>(Channel.UNLIMITED)
+        val sentenceBuffer = SentenceBuffer { sentence -> sentenceChannel.trySend(sentence) }
 
         val assistantText = StringBuilder()
         val toolCalls = mutableListOf<ToolCall>()
 
-        llm.chat(messages, tools).collect { delta ->
-            delta.text?.let { assistantText.append(it); sentenceBuffer.append(it) }
-            delta.toolCall?.let { toolCalls.add(it) }
+        coroutineScope {
+            val playbackJob = launch {
+                for (sentence in sentenceChannel) {
+                    onSpeak(tts.synthesize(sentence))
+                }
+            }
+            llm.chat(messages, tools).collect { delta ->
+                delta.text?.let { assistantText.append(it); sentenceBuffer.append(it) }
+                delta.toolCall?.let { toolCalls.add(it) }
+            }
+            sentenceBuffer.flush()
+            sentenceChannel.close()
+            playbackJob.join()
         }
-        sentenceBuffer.flush()
 
         val reply = assistantText.toString()
         if (reply.isNotBlank()) {
             history.add(Message(role = Role.assistant, content = reply))
             memoryStore?.save(Memory(role = "assistant", content = reply, sessionId = sessionId))
-            tts.synthesize(reply)
         }
 
         // Trim in-session history to the sliding window

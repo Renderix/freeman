@@ -29,10 +29,11 @@ MOONSHINE_DIR="$MODELS/moonshine"
 if [ ! -f "$MOONSHINE_DIR/encode.int8.onnx" ]; then
     echo "[moonshine] Downloading Moonshine Tiny ONNX…"
     mkdir -p "$MOONSHINE_DIR"
-    BASE="https://github.com/usefulsensors/moonshine/releases/download/v0.1.0"
-    for f in preprocess.onnx encode.int8.onnx uncached_decode.int8.onnx cached_decode.int8.onnx; do
-        curl -fL "$BASE/$f" -o "$MOONSHINE_DIR/$f"
-    done
+    curl -fL "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-moonshine-tiny-en-int8.tar.bz2" \
+         -o /tmp/moonshine.tar.bz2
+    tar -xjf /tmp/moonshine.tar.bz2 -C /tmp
+    cp -r /tmp/sherpa-onnx-moonshine-tiny-en-int8/. "$MOONSHINE_DIR/"
+    rm -f /tmp/moonshine.tar.bz2
     echo "[moonshine] → models/moonshine/"
 else
     echo "[moonshine] Already present — skipping."

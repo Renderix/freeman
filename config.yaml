@@ -5,21 +5,18 @@ persona:
   rules: []             # e.g. ["Keep replies under 3 sentences.", "Always respond in English."]
 
 llm:
-  provider: ollama      # ollama | claude
-  model: gemma4:e4b     # ollama model name — or claude-sonnet-4-6 / claude-opus-4-7
-  baseUrl: http://localhost:11434
-  numCtx: 8192          # ollama: context window size (tokens)
-  keepAlive: "-1"       # ollama: keep model loaded forever
-  # apiKey: sk-ant-...  # claude: or set ANTHROPIC_API_KEY env var
+  provider: claude
+  model: claude-sonnet-4-6
+  baseUrl: https://api.anthropic.com
 
 tts:
-  modelPath: /path/to/kokoro   # download: https://github.com/k2-fsa/sherpa-onnx/releases
+  modelPath: /Users/ayusman/hale/freeman/models/kokoro
   voice: bm_george
   speed: 1.0
 
 stt:
   enabled: true
-  modelPath: /path/to/moonshine  # download: https://github.com/k2-fsa/sherpa-onnx/releases
+  modelPath: /Users/ayusman/hale/freeman/models/moonshine
 
 wakeword:
   enabled: false        # set true if you have OpenWakeWord models
@@ -37,4 +34,4 @@ tools:
 
 # Path to sherpa-onnx native libs — used by run.sh to set -Djava.library.path
 # Download: https://github.com/k2-fsa/sherpa-onnx/releases (pick the JVM package for your OS)
-libsPath: /path/to/sherpa-onnx/libs
+libsPath: /Users/ayusman/hale/freeman/macos/libs
