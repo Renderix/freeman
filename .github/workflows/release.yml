@@ -66,7 +66,11 @@ jobs:
             echo "[Freeman] libsPath not set in $CONFIG — set it to your sherpa-onnx libs directory"
             exit 1
           fi
-          java -Djava.library.path="$LIBS" -jar "$DIR/freeman.jar" "$CONFIG"
+          # taskpolicy -b: yield CPU to foreground apps automatically on macOS
+          exec taskpolicy -b java \
+            -Djava.library.path="$LIBS" \
+            -Xms64m -Xmx1500m \
+            -jar "$DIR/freeman.jar" "$CONFIG"
           EOF
           chmod +x ${DIST}/run.sh
 
