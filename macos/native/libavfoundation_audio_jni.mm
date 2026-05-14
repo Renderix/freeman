@@ -192,7 +192,11 @@ JNIEXPORT void JNICALL Java_ai_freeman_macos_audio_AVFoundationAudioJNI_stopCapt
 
 JNIEXPORT jint JNICALL Java_ai_freeman_macos_audio_AVFoundationAudioJNI_playSamples(
         JNIEnv* env, jclass cls, jfloatArray samples, jint sampleRate) {
-    if (!playerNode || !engine || !gPlayFmt) return -1;
+    if (!playerNode || !engine || !gPlayFmt) {
+        NSLog(@"[AVFoundationJNI] playSamples: not ready (playerNode=%d engine=%d gPlayFmt=%d)",
+              playerNode != nil, engine != nil, gPlayFmt != nil);
+        return -1;
+    }
 
     jsize   len = env->GetArrayLength(samples);
     jfloat* src = env->GetFloatArrayElements(samples, NULL);
@@ -222,7 +226,11 @@ JNIEXPORT jint JNICALL Java_ai_freeman_macos_audio_AVFoundationAudioJNI_playSamp
                 if (!consumed) { consumed = YES; *status = AVAudioConverterInputStatus_HaveData; return inBuf; }
                 *status = AVAudioConverterInputStatus_NoDataNow; return nil;
             }];
-        if (convErr || playBuf.frameLength == 0) return -1;
+        if (convErr || playBuf.frameLength == 0) {
+            NSLog(@"[AVFoundationJNI] playSamples: converter failed (err=%@ frameLength=%u)",
+                  convErr, (unsigned)playBuf.frameLength);
+            return -1;
+        }
     }
 
     atomic_fetch_add(&gPlayingBuffers, 1);
@@ -241,7 +249,10 @@ JNIEXPORT jint JNICALL Java_ai_freeman_macos_audio_AVFoundationAudioJNI_playSamp
         dispatch_semaphore_signal(sem);
     }];
     dispatch_time_t timeout = dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC);
-    if (dispatch_semaphore_wait(sem, timeout) != 0) { gIsPlaying = NO; return -1; }
+    if (dispatch_semaphore_wait(sem, timeout) != 0) {
+        NSLog(@"[AVFoundationJNI] playSamples: semaphore timeout after 10s");
+        gIsPlaying = NO; return -1;
+    }
     return 0;
 }
 

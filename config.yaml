@@ -2,37 +2,37 @@ persona:
   name: Freeman
   greeting: "Hey, I'm Freeman. What can I do for you?"
   farewell: "Catch you later."
-  rules: []             # e.g. ["Keep replies under 3 sentences.", "Always respond in English."]
+  rules: []
 
 llm:
-  provider: claude
-  model: claude-sonnet-4-6
-  baseUrl: https://api.anthropic.com
+  provider: ollama
+  model: gemma4:31b-cloud
+  baseUrl: http://localhost:11434
+  numCtx: 8192
+  keepAlive: "-1m"
 
 tts:
-  modelPath: models/kokoro
+  modelPath: /Users/ayusman/hale/freeman/models/kokoro
   voice: bm_george
   speed: 1.0
 
 stt:
   enabled: true
-  provider: whisper     # whisper (macOS) | moonshine (Android)
-  modelPath: models/whisper-small
+  provider: whisper
+  modelPath: /Users/ayusman/hale/freeman/models/whisper-small
 
 wakeword:
-  enabled: false        # set true if you have OpenWakeWord models
-  modelsDir: models/wakeword
+  enabled: false
+  modelsDir: /Users/ayusman/hale/freeman/models/wakeword
   threshold: 0.5
 
 memory:
-  enabled: true         # set false to run stateless (no SQLite)
+  enabled: true
   dbPath: ~/.freeman/memory.db
-  historyWindow: 20     # recent turns kept in-context per session
-  recallLimit: 5        # past turns retrieved from DB per query
+  historyWindow: 20
+  recallLimit: 5
 
 tools:
   dirs: []
 
-# Path to sherpa-onnx native libs — used by run.sh to set -Djava.library.path
-# Download via: ./scripts/setup_kotlin_libs.sh
-libsPath: macos/libs
+libsPath: /Users/ayusman/hale/freeman/libs

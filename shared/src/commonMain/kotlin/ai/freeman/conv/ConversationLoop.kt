@@ -109,6 +109,8 @@ class ConversationLoop(
             println("[Freeman] ${ts()} ← LLM done: \"${reply.take(80)}\"")
             history.add(Message(role = Role.assistant, content = reply))
             memoryStore?.save(Memory(role = "assistant", content = reply, sessionId = sessionId))
+        } else if (toolCalls.isEmpty()) {
+            println("[Freeman] ${ts()} ← LLM done: (empty response)")
         }
 
         // Trim in-session history to the sliding window

@@ -49,6 +49,15 @@ class OllamaProvider(private val config: LLMConfig) : LLMProvider {
             val line = channel.readUTF8Line() ?: break
             if (line.isBlank()) continue
             try {
+                // Surface Ollama error responses before attempting to parse as a chunk
+                val errorMsg = try {
+                    json.decodeFromString<OllamaError>(line).error
+                } catch (_: Exception) { null }
+                if (errorMsg != null) {
+                    println("[Freeman] Ollama error: $errorMsg")
+                    break
+                }
+
                 val chunk = json.decodeFromString<OllamaChunk>(line)
                 val toolCalls = chunk.message?.tool_calls
                 val content = chunk.message?.content
@@ -102,6 +111,9 @@ class OllamaProvider(private val config: LLMConfig) : LLMProvider {
             }
         }
 }
+
+@Serializable
+private data class OllamaError(val error: String)
 
 @Serializable
 private data class OllamaChunk(

@@ -169,7 +169,7 @@ llm:
   model: $LLM_MODEL
   baseUrl: $LLM_BASE_URL
   numCtx: 8192
-  keepAlive: "-1"
+  keepAlive: "-1m"
 $([ -n "$LLM_API_KEY" ] && echo "  apiKey: $LLM_API_KEY")
 tts:
   modelPath: $DIR/models/kokoro
