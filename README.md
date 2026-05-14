@@ -34,6 +34,8 @@ The script will ask for your LLM provider and persona settings, download the req
 
 Say **"hey Freeman"** (if wake word is enabled) or speak directly after the app starts.
 
+> The ZIP bundles `libavfoundation_audio_jni.dylib`, the sherpa-onnx native JARs, and setup scripts — everything needed to run without any manual library hunting.
+
 ---
 
 ## LLM Options
