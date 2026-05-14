@@ -50,28 +50,31 @@ jobs:
           VERSION=${GITHUB_REF_NAME}
           DIST=freeman-${VERSION}-macos
 
-          mkdir -p ${DIST}
+          mkdir -p ${DIST}/libs
 
-          cp macos/build/libs/macos-macos.jar ${DIST}/freeman.jar
-          cp config.yaml                      ${DIST}/config.yaml
-          cp setup.sh                         ${DIST}/setup.sh
+          cp macos/build/libs/macos-macos.jar   ${DIST}/freeman.jar
+          cp config.yaml                        ${DIST}/config.yaml
+          cp setup.sh                           ${DIST}/setup.sh
           chmod +x ${DIST}/setup.sh
 
+          # Bundle native dylibs so the JAR can run without a separate install step
+          cp macos/libs/libavfoundation_audio_jni.dylib            ${DIST}/libs/
+          cp macos/libs/sherpa-onnx-native-lib-osx-aarch64-*.jar   ${DIST}/libs/
+
+          # Bundle setup scripts for model downloads
+          cp -r scripts/ ${DIST}/scripts/
+          chmod +x ${DIST}/scripts/*.sh
+
           cat > ${DIST}/run.sh <<'EOF'
-          #!/bin/bash
-          DIR="$(cd "$(dirname "$0")" && pwd)"
-          CONFIG="${1:-$DIR/config.yaml}"
-          LIBS=$(grep 'libsPath:' "$CONFIG" | sed 's/.*libsPath: *//' | tr -d '"' | xargs)
-          if [ -z "$LIBS" ]; then
-            echo "[Freeman] libsPath not set in $CONFIG — set it to your sherpa-onnx libs directory"
-            exit 1
-          fi
-          # taskpolicy -b: yield CPU to foreground apps automatically on macOS
-          exec taskpolicy -b java \
-            -Djava.library.path="$LIBS" \
-            -Xms64m -Xmx1500m \
-            -jar "$DIR/freeman.jar" "$CONFIG"
-          EOF
+#!/bin/bash
+DIR="$(cd "$(dirname "$0")" && pwd)"
+CONFIG="${1:-$DIR/config.yaml}"
+# taskpolicy -b: yield CPU to foreground apps automatically on macOS
+exec taskpolicy -b java \
+  -Djava.library.path="$DIR/libs" \
+  -Xms64m -Xmx1500m \
+  -jar "$DIR/freeman.jar" "$CONFIG"
+EOF
           chmod +x ${DIST}/run.sh
 
           zip -r ${DIST}.zip ${DIST}

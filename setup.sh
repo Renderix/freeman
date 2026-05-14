@@ -54,21 +54,11 @@ else
 fi
 echo ""
 
-echo "-- TTS (Kokoro) --"
-echo "Download from: https://github.com/k2-fsa/sherpa-onnx/releases"
-TTS_MODEL=$(prompt "Path to Kokoro model directory" "$DIR/models/kokoro")
-TTS_VOICE=$(prompt "Voice" "bm_george")
-TTS_SPEED=$(prompt "Speed" "1.0")
-echo ""
-
-echo "-- STT --"
-echo "Provider options: whisper (macOS, Metal GPU), moonshine (Android/low-latency)"
-STT_PROVIDER=$(prompt "Provider" "whisper")
-if [ "$STT_PROVIDER" = "whisper" ]; then
-  STT_MODEL=$(prompt "Path to Whisper model directory" "$DIR/models/whisper-small")
-else
-  STT_MODEL=$(prompt "Path to Moonshine model directory" "$DIR/models/moonshine")
-fi
+echo "-- TTS / STT --"
+TTS_VOICE=$(prompt "TTS voice" "bm_george")
+TTS_SPEED=$(prompt "TTS speed" "1.0")
+echo "STT provider options: whisper (macOS, recommended), moonshine (lower latency)"
+STT_PROVIDER=$(prompt "STT provider" "whisper")
 echo ""
 
 echo "-- Wake word --"
@@ -88,11 +78,7 @@ MEMORY_ENABLED=$(prompt_yn "Enable persistent memory (SQLite)?" "y")
 MEMORY_DB=$(prompt "Database path" "~/.freeman/memory.db")
 echo ""
 
-echo "-- Native libs --"
-echo "Download the sherpa-onnx JVM package for your OS from:"
-echo "https://github.com/k2-fsa/sherpa-onnx/releases"
-LIBS_PATH=$(prompt "Path to sherpa-onnx libs directory" "$DIR/libs")
-echo ""
+LIBS_PATH="$DIR/libs"
 
 # Build libavfoundation_audio_jni.dylib if on macOS and not already present
 if [[ "$(uname)" == "Darwin" ]] && [ ! -f "$LIBS_PATH/libavfoundation_audio_jni.dylib" ]; then
@@ -119,10 +105,58 @@ if [[ "$(uname)" == "Darwin" ]] && [ ! -f "$LIBS_PATH/libavfoundation_audio_jni.
   echo ""
 fi
 
-# Write config.yaml
-API_KEY_LINE=""
-[ -n "$LLM_API_KEY" ] && API_KEY_LINE="  apiKey: $LLM_API_KEY"
+# Download ML models
+echo "-- Downloading ML models --"
+if [ -f "$DIR/scripts/setup_models.sh" ]; then
+  bash "$DIR/scripts/setup_models.sh"
+else
+  # Inline model downloads for release ZIP (no scripts/ folder)
+  MODELS="$DIR/models"
+  mkdir -p "$MODELS"
 
+  if [ ! -f "$MODELS/kokoro/model.onnx" ]; then
+    echo "[kokoro] Downloading Kokoro TTS…"
+    mkdir -p "$MODELS/kokoro"
+    curl -fL "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-en-v0_19.tar.bz2" -o /tmp/kokoro.tar.bz2
+    tar -xjf /tmp/kokoro.tar.bz2 -C /tmp && cp -r /tmp/kokoro-en-v0_19/. "$MODELS/kokoro/" && rm -f /tmp/kokoro.tar.bz2
+    echo "[kokoro] done"
+  fi
+
+  if [ ! -f "$MODELS/whisper-small/encoder.int8.onnx" ]; then
+    echo "[whisper] Downloading Whisper small.en…"
+    mkdir -p "$MODELS/whisper-small"
+    curl -fL "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-small.en.tar.bz2" -o /tmp/whisper.tar.bz2
+    tar -xjf /tmp/whisper.tar.bz2 -C /tmp && cp -r /tmp/sherpa-onnx-whisper-small.en/. "$MODELS/whisper-small/" && rm -f /tmp/whisper.tar.bz2
+    echo "[whisper] done"
+  fi
+
+  if [ ! -f "$MODELS/moonshine/encode.int8.onnx" ]; then
+    echo "[moonshine] Downloading Moonshine STT…"
+    mkdir -p "$MODELS/moonshine"
+    curl -fL "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-moonshine-tiny-en-int8.tar.bz2" -o /tmp/moonshine.tar.bz2
+    tar -xjf /tmp/moonshine.tar.bz2 -C /tmp && cp -r /tmp/sherpa-onnx-moonshine-tiny-en-int8/. "$MODELS/moonshine/" && rm -f /tmp/moonshine.tar.bz2
+    echo "[moonshine] done"
+  fi
+
+  if [ ! -f "$MODELS/silero/silero_vad.onnx" ]; then
+    echo "[silero] Downloading Silero VAD…"
+    mkdir -p "$MODELS/silero"
+    curl -fL "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx" -o "$MODELS/silero/silero_vad.onnx"
+    echo "[silero] done"
+  fi
+
+  if [ ! -f "$MODELS/wakeword/melspectrogram.onnx" ]; then
+    echo "[wakeword] Downloading OpenWakeWord shared models…"
+    mkdir -p "$MODELS/wakeword"
+    OWW_BASE="https://github.com/dscripka/openWakeWord/releases/download/v0.6.0"
+    curl -fL "$OWW_BASE/melspectrogram.onnx"  -o "$MODELS/wakeword/melspectrogram.onnx"
+    curl -fL "$OWW_BASE/embedding_model.onnx" -o "$MODELS/wakeword/embedding_model.onnx"
+    echo "[wakeword] done (you still need hey_freeman.onnx — see README)"
+  fi
+fi
+echo ""
+
+# Write config.yaml
 cat > "$CONFIG" <<EOF
 persona:
   name: $PERSONA_NAME
@@ -138,14 +172,14 @@ llm:
   keepAlive: "-1"
 $([ -n "$LLM_API_KEY" ] && echo "  apiKey: $LLM_API_KEY")
 tts:
-  modelPath: $TTS_MODEL
+  modelPath: $DIR/models/kokoro
   voice: $TTS_VOICE
   speed: $TTS_SPEED
 
 stt:
   enabled: true
   provider: $STT_PROVIDER
-  modelPath: $STT_MODEL
+  modelPath: $DIR/models/$( [ "$STT_PROVIDER" = "whisper" ] && echo "whisper-small" || echo "moonshine" )
 
 wakeword:
   enabled: $WAKEWORD_ENABLED
