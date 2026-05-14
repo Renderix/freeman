@@ -15,9 +15,20 @@ fi
 echo $$ > "$LOCKFILE"
 trap 'rm -f "$LOCKFILE"' EXIT INT TERM
 
+# Build a renamed JVM launcher so Activity Monitor shows "Freeman" instead of "java".
+# The original binary uses @loader_path/../lib for libjli.dylib, which breaks when
+# copied to a different directory — so we add the absolute lib path and re-sign.
+LAUNCHER="$DIR/.launcher/Freeman"
+if [ ! -f "$LAUNCHER" ]; then
+    mkdir -p "$DIR/.launcher"
+    JAVA_HOME_DIR=$(java -XshowSettings:all -version 2>&1 | awk '/java.home/{print $3}')
+    cp "$JAVA_HOME_DIR/bin/java" "$LAUNCHER"
+    install_name_tool -add_rpath "$JAVA_HOME_DIR/lib" "$LAUNCHER" 2>/dev/null || true
+    codesign --force --sign - "$LAUNCHER"
+fi
+
 # taskpolicy -b: yield CPU to foreground apps on macOS
-# exec -a Freeman: show "Freeman" in Activity Monitor instead of "java"
-exec taskpolicy -b java -Xdock:name=Freeman \
+exec taskpolicy -b "$LAUNCHER" \
   -Djava.library.path="$DIR/macos/libs" \
   -Xms64m -Xmx1500m \
   -jar "$DIR/macos/build/libs/macos-macos.jar" \
