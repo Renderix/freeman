@@ -1,7 +1,6 @@
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.kotlin.serialization)
-    alias(libs.plugins.graalvm.native)
 }
 
 kotlin {
@@ -36,23 +35,4 @@ tasks.named<Jar>("macosJar") {
         cfg.map { if (it.isDirectory) it else zipTree(it) }
     })
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
-}
-
-graalvmNative {
-    toolchainDetection.set(true)   // Gradle downloads GraalVM automatically — no manual install
-    binaries {
-        create("main") {
-            javaLauncher.set(javaToolchains.launcherFor {
-                languageVersion.set(JavaLanguageVersion.of(21))
-                vendor.set(JvmVendorSpec.matching("GraalVM"))
-            })
-            imageName.set("freeman")
-            mainClass.set("ai.freeman.macos.MainKt")
-            buildArgs.addAll(
-                "--no-fallback",
-                "-H:ConfigurationFileDirectories=native-image/",
-                "-H:+ReportExceptionStackTraces",
-            )
-        }
-    }
 }

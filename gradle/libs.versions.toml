@@ -3,7 +3,6 @@ kotlin = "2.1.0"
 coroutines = "1.8.1"
 serialization = "1.7.1"
 ktor = "3.0.0"
-graalvm-native = "0.10.3"
 android-gradle = "8.3.0"
 sherpa-onnx = "1.13.1"
 onnxruntime = "1.19.2"
@@ -27,4 +26,3 @@ kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 android-application = { id = "com.android.application", version.ref = "android-gradle" }
 android-library = { id = "com.android.library", version.ref = "android-gradle" }
-graalvm-native = { id = "org.graalvm.buildtools.native", version.ref = "graalvm-native" }

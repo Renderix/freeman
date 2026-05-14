@@ -61,9 +61,14 @@ TTS_VOICE=$(prompt "Voice" "bm_george")
 TTS_SPEED=$(prompt "Speed" "1.0")
 echo ""
 
-echo "-- STT (Moonshine) --"
-echo "Download from: https://github.com/k2-fsa/sherpa-onnx/releases"
-STT_MODEL=$(prompt "Path to Moonshine model directory" "$DIR/models/moonshine")
+echo "-- STT --"
+echo "Provider options: whisper (macOS, Metal GPU), moonshine (Android/low-latency)"
+STT_PROVIDER=$(prompt "Provider" "whisper")
+if [ "$STT_PROVIDER" = "whisper" ]; then
+  STT_MODEL=$(prompt "Path to Whisper model directory" "$DIR/models/whisper-small")
+else
+  STT_MODEL=$(prompt "Path to Moonshine model directory" "$DIR/models/moonshine")
+fi
 echo ""
 
 echo "-- Wake word --"
@@ -139,6 +144,7 @@ tts:
 
 stt:
   enabled: true
+  provider: $STT_PROVIDER
   modelPath: $STT_MODEL
 
 wakeword:

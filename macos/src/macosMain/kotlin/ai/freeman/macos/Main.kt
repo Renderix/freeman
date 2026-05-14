@@ -49,8 +49,8 @@ fun main(args: Array<String>) {
     }
     val tts = MacosTTSFactory.create(config.tts)
     val stt = when (config.stt.provider) {
-        "whisper" -> WhisperStt(config.stt.modelPath)
-        else      -> MoonshineStt(config.stt.modelPath)
+        "whisper"  -> WhisperStt(config.stt.modelPath)
+        else       -> MoonshineStt(config.stt.modelPath)
     }
 
     val vad: SileroVAD? = if (config.wakeword.enabled)

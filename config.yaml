@@ -10,18 +10,18 @@ llm:
   baseUrl: https://api.anthropic.com
 
 tts:
-  modelPath: /Users/ayusman/hale/freeman/models/kokoro
+  modelPath: models/kokoro
   voice: bm_george
   speed: 1.0
 
 stt:
   enabled: true
-  provider: whisper
-  modelPath: /Users/ayusman/hale/freeman/models/whisper-small
+  provider: whisper     # whisper (macOS) | moonshine (Android)
+  modelPath: models/whisper-small
 
 wakeword:
   enabled: false        # set true if you have OpenWakeWord models
-  modelsDir: /path/to/wakeword/models
+  modelsDir: models/wakeword
   threshold: 0.5
 
 memory:
@@ -34,5 +34,5 @@ tools:
   dirs: []
 
 # Path to sherpa-onnx native libs — used by run.sh to set -Djava.library.path
-# Download: https://github.com/k2-fsa/sherpa-onnx/releases (pick the JVM package for your OS)
-libsPath: /Users/ayusman/hale/freeman/macos/libs
+# Download via: ./scripts/setup_kotlin_libs.sh
+libsPath: macos/libs

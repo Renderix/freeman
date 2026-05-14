@@ -6,7 +6,6 @@
 |-------------|---------|---------|
 | JDK 21 | 21+ | `brew install --cask temurin@21` |
 | Ollama | latest | `brew install ollama` |
-| PortAudio | any | `brew install portaudio` |
 
 > **Apple Silicon (M1/M2/M3/M4):** everything works natively — no Rosetta needed.
 > **Intel Mac:** supported; the setup script picks the right native JNI tarball automatically.
@@ -38,7 +37,7 @@ This downloads into `macos/libs/` — the run command points `java.library.path`
 
 Downloads:
 - `models/kokoro/` — Kokoro-82M ONNX TTS (~150 MB)
-- `models/moonshine/` — Moonshine Tiny ONNX STT (~27 MB)
+- `models/whisper/` — Whisper small.en GGML STT (~150 MB)
 - `models/silero/silero_vad.onnx` — Silero VAD (~2 MB)
 - `models/wakeword/` — OpenWakeWord shared models
 
