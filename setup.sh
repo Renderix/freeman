@@ -148,7 +148,7 @@ else
   if [ ! -f "$MODELS/wakeword/melspectrogram.onnx" ]; then
     echo "[wakeword] Downloading OpenWakeWord shared models…"
     mkdir -p "$MODELS/wakeword"
-    OWW_BASE="https://github.com/dscripka/openWakeWord/releases/download/v0.6.0"
+    OWW_BASE="https://github.com/dscripka/openWakeWord/releases/download/v0.5.1"
     curl -fL "$OWW_BASE/melspectrogram.onnx"  -o "$MODELS/wakeword/melspectrogram.onnx"
     curl -fL "$OWW_BASE/embedding_model.onnx" -o "$MODELS/wakeword/embedding_model.onnx"
     echo "[wakeword] done (you still need hey_freeman.onnx — see README)"

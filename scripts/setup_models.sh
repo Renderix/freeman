@@ -66,12 +66,12 @@ else
     echo "[silero] Already present — skipping."
 fi
 
-# ── OpenWakeWord / hey-freeman ─────────────────────────────────────────────
+# ── OpenWakeWord shared models ─────────────────────────────────────────────
 WW_DIR="$MODELS/wakeword"
-if [ ! -f "$WW_DIR/hey_freeman.onnx" ]; then
+if [ ! -f "$WW_DIR/melspectrogram.onnx" ]; then
     echo "[wakeword] Downloading OpenWakeWord shared models…"
     mkdir -p "$WW_DIR"
-    OWW_BASE="https://github.com/dscripka/openWakeWord/releases/download/v0.6.0"
+    OWW_BASE="https://github.com/dscripka/openWakeWord/releases/download/v0.5.1"
     curl -fL "$OWW_BASE/melspectrogram.onnx"   -o "$WW_DIR/melspectrogram.onnx"
     curl -fL "$OWW_BASE/embedding_model.onnx"  -o "$WW_DIR/embedding_model.onnx"
     echo "[wakeword] Shared models → models/wakeword/"
