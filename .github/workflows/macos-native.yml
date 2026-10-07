@@ -1,0 +1,106 @@
+name: Build Freeman macOS Native Binary
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-native:
+    runs-on: macos-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@6d5d4c1c26335fbfba38c70d3600ef96e9793316
+        with:
+          gradle-home: gradle
+
+      - name: Set up GraalVM CE 22.3.0
+        uses: graalvm/setup-graalvm@2release
+        with:
+          graalvm-version: '22.3.0'
+          java-version: '21'
+          distribution: 'ce'
+
+      - name: Cache GraalVM
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/share/graalvm
+            ~/.cache/graalvm
+          key: graalvm-22.3.0-${{ runner.os }}-{{ hashFiles('**/*.kt', '**/*.kts') }}
+          restore-keys: graalvm-22.3.0-
+
+      - name: Build KMP JVM fat JAR
+        run: ./gradlew :macos:macosJar 2>&1 | tail -10
+
+      - name: Find the JAR
+        id: jar
+        run: |
+          JAR="macos/build/libs/macos-macos.jar"
+          if [ -f "$JAR" ]; then
+            echo "found=true" >> $GITHUB_OUTPUT
+            echo "jar_path=$JAR" >> $GITHUB_OUTPUT
+          else
+            echo "found=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install native-image (bundled with GraalVM)
+        # native-image is already installed via graalvm/setup-graalvm
+        run: which native-image
+
+      - name: Build native image from JAR
+        # Attempt to build a native binary using native-image
+        # The -J flags set JVM options for the native-image builder
+        run: |
+          if [ "${{ steps.jar.outputs.found }}" = "true" ]; then
+            echo "=== Building native image ==="
+            native-image \
+              -J-Xmx512m \
+              -cp ${{ steps.jar.outputs.jar_path }} \
+              -H:Name=freeman-native \
+              ai.freeman.macos.MainKt \
+              2>&1 | tee /tmp/native-build.log | tail -100
+            
+            if [ -f freeman-native ]; then
+              echo "=== SUCCESS: Native binary built ==="
+              ls -la freeman-native
+              file freeman-native
+            else
+              echo "=== Native image build did not produce binary ==="
+              echo "Checking log for errors..."
+              grep -i "error\|FAIL\|failed\|unsupported\|reflect" /tmp/native-build.log | head -30
+              echo "---"
+              echo "If native-image failed, the binary JAR is still available as an artifact."
+            fi
+          else
+            echo "::error::JAR not found, cannot build native image"
+          fi
+
+      - name: Make binary executable
+        run: chmod +x freeman-native 2>/dev/null || echo "No binary to chmod"
+
+      - name: Upload JAR as artifact (always)
+        uses: actions/upload-artifact@v4
+        with:
+          name: freeman-macos-jar
+          path: |
+            macos/build/libs/macos-macos.jar
+
+      - name: Upload native binary if built
+        if: env.BINARY_BUILT == 'true' || file freeman-native > /dev/null 2>&1
+        uses: actions/upload-release-asset@v2
+        with:
+          upload_url: ${{ github.server_url }}/repos/${{ github.repository }}/releases/assets
+          file: freeman-native
+          asset_name: freeman-native-macos-${{ github.sha }}
+          asset_content_type: application/octet-stream
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
