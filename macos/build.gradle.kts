@@ -1,7 +1,6 @@
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.kotlin.serialization)
-    id("com.github.graalvm.build.native") version "2.3.0"
 }
 
 kotlin {

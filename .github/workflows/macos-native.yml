@@ -1,4 +1,4 @@
-name: Build Freeman macOS Native Binary
+name: Build Freeman macOS Native JAR
 
 on:
   push:
@@ -7,9 +7,9 @@ on:
     branches: [main]
 
 jobs:
-  build-native:
+  build:
     runs-on: macos-latest
-    timeout-minutes: 90
+    timeout-minutes: 60
 
     steps:
       - name: Checkout repository
@@ -22,74 +22,32 @@ jobs:
         with:
           gradle-home: gradle
 
-      - name: Set up GraalVM CE 22.3.0
-        uses: graalvm/setup-graalvm@2release
-        with:
-          graalvm-version: '22.3.0'
-          java-version: '21'
-          distribution: 'ce'
-
-      - name: Cache GraalVM
+      - name: Cache Gradle
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.local/share/graalvm
-            ~/.cache/graalvm
-          key: graalvm-22.3.0-${{ runner.os }}-{{ hashFiles('**/*.kt', '**/*.kts') }}
-          restore-keys: graalvm-22.3.0-
+          path: ~/.gradle/caches
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.kt', '**/*.kts') }}
+          restore-keys: gradle-
 
       - name: Build KMP JVM fat JAR
         run: ./gradlew :macos:macosJar 2>&1 | tail -10
 
-      - name: Build native macOS image
-        # The GraalVM native plugin for KMP generates macosNativeImage task
-        run: ./gradlew :macos:macosNativeImage 2>&1 | tee /tmp/native-build.log | tail -80
-
-      - name: Find native binary
-        id: binfind
-        run: |
-          # Native plugin typically outputs to these paths
-          for path in \
-            "macos/build/native/universal/release/macos-x64/freeman" \
-            "macos/build/native/universal/release/macos-arm64/freeman" \
-            "macos/build/native/x64/release/freeman" \
-            "macos/build/native/arm64/release/freeman"; do
-            if [ -f "$path" ]; then
-              echo "binary_path=$path" >> $GITHUB_OUTPUT
-              echo "found=true" >> $GITHUB_OUTPUT
-              break
-            fi
-          done
-          if [ "${{ steps.binfind.outputs.found }}" != "true" ]; then
-            echo "found=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Upload JAR artifact (always)
+      - name: Upload JAR artifact
         uses: actions/upload-artifact@v4
         with:
           name: freeman-macos-jar
           path: macos/build/libs/macos-macos.jar
 
-      - name: Upload native binary if built
-        if: "${{ steps.binfind.outputs.found == 'true' }}"
-        uses: actions/upload-release-asset@v2
-        with:
-          upload_url: ${{ github.server_url }}/repos/${{ github.repository }}/releases/assets
-          file: ${{ steps.binfind.outputs.binary_path }}
-          asset_name: freeman-native-macos-${{ github.sha }}
-          asset_content_type: application/octet-stream
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build status
+      - name: Build status summary
         if: always()
         run: |
-          echo "=== Native build complete ==="
-          if [ "${{ steps.binfind.outputs.found }}" = "true" ]; then
-            echo "Binary at: ${{ steps.binfind.outputs.binary_path }}"
-            ls -la "${{ steps.binfind.outputs.binary_path }}"
-            file "${{ steps.binfind.outputs.binary_path }}"
-          else
-            echo "No native binary produced (check /tmp/native-build.log for details)"
-            echo "JAR artifact still available: macos/build/libs/macos-macos.jar"
-          fi
+          echo "=== Build complete ==="
+          echo "JAR artifact: macos/build/libs/macos-macos.jar (uploaded as freeman-macos-jar)"
+          echo ""
+          echo "To build native binary locally:"
+          echo "  1. Install GraalVM CE: https://www.graalvm.org/downloads/"
+          echo "  2. Run: ./gradlew :macos:macosNativeImage"
+          echo "  3. Binary: macos/build/native/.../freeman"
+          echo ""
+          echo "Then run: ./freeman-native config.yaml"
+          echo "(No -Djava.library.path needed — native bundles ONNX Runtime)"
