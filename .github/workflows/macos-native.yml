@@ -22,19 +22,26 @@ jobs:
           distribution: 'zulu'
           cache: 'gradle'
 
-      - name: Install Gradle if needed
-        # Use the Gradle wrapper that's already in the repo
-        # The gradle wrapper files (gradlew, gradle.properties) are version-controlled
-        run: |
-          chmod +x gradlew
-          ./gradlew --version 2>&1 | head -3
-
       - name: Build KMP JVM fat JAR
-        # Use the local Gradle wrapper - no external action needed
+        # Uses the repo's Gradle wrapper; output always visible
         run: ./gradlew :macos:macosJar 2>&1 | tail -10
+
+      - name: Verify JAR exists
+        # Step ID: verify-jar
+        id: verify-jar
+        run: |
+          JAR="macos/build/libs/macos-macos.jar"
+          if [ -f "$JAR" ]; then
+            echo "JAR found at: $JAR"
+            echo "upload=true" >> $GITHUB_OUTPUT
+          else
+            echo "JAR not found at $JAR"
+            echo "upload=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Upload JAR artifact
         uses: actions/upload-artifact@v4
+        if: steps.verify-jar.outputs.upload == 'true'
         with:
           name: freeman-macos-jar
           path: macos/build/libs/macos-macos.jar
@@ -42,10 +49,18 @@ jobs:
       - name: Build complete
         if: always()
         run: |
-          echo "=== Build finished ==="
-          echo "JAR: macos/build/libs/macos-macos.jar (uploaded as freeman-macos-jar artifact)"
+          echo "=== Freeman macOS JAR Build ==="
+          if [ "${{ steps.verify-jar.outputs.upload }}" = "true" ]; then
+            echo "JAR uploaded successfully: freeman-macos-jar artifact"
+            echo "Download from: Actions → Artifacts sidebar"
+          else
+            echo "JAR not found — check build log above for errors"
+          fi
           echo ""
-          echo "To build native binary on local machine:"
-          echo "  1. Install GraalVM CE 22.3.0: https://www.graalvm.org/downloads/"
-          echo "  2. Run: ./gradlew :macos:macosNativeImage"
-          echo "  3. Run: ./freeman-native config.yaml (no -Djava.library.path needed)"
+          echo "To run Freeman locally:"
+          echo "  java -Djava.library.path=macos/libs -jar macos/build/libs/macos-macos.jar config.yaml"
+          echo ""
+          echo "To build native binary:"
+          echo "  1. Install GraalVM CE 22.3.0"
+          echo "  2. ./gradlew :macos:macosNativeImage"
+          echo "  3. ./freeman-native config.yaml (no -Djava.library.path needed)"
